@@ -48,7 +48,7 @@ def start_session(child_id: int) -> dict:
     return {"session_id": session_id, "opening": opening, "memory_pack": pack}
 
 
-def handle_message(session_id: str, text: str) -> dict:
+def handle_message(session_id: str, text: str, image_b64: str | None = None) -> dict:
     s = SESSIONS.get(session_id)
     if not s:
         raise KeyError("session not found")
@@ -58,9 +58,10 @@ def handle_message(session_id: str, text: str) -> dict:
 
     reply = None
     if llm.live_mode():
-        reply = llm.chat(prompts.build_doll_system(s["pack"]), s["history"])
+        reply = llm.chat(prompts.build_doll_system(s["pack"]), s["history"],
+                         image_b64=image_b64 if llm.supports_vision() else None)
     if not reply:
-        reply = _mock_reply(s, text)
+        reply = _mock_reply(s, text, has_image=bool(image_b64))
 
     _track_doll_reply(s, reply)
     s["history"].append({"role": "assistant", "content": reply})
@@ -171,9 +172,16 @@ def _pick(s, options: list[str]) -> str:
     return reply
 
 
-def _mock_reply(s, text: str) -> str:
+def _mock_reply(s, text: str, has_image: bool = False) -> str:
     pack = s["pack"]
     child_name = pack["child_card"].get("name", "你")
+
+    # 孩子给玩偶看东西（摄像头帧）：离线引擎看不见，诚实但好奇地接住
+    if has_image:
+        return _pick(s, [
+            f"哇，{child_name}给我看的这个我盯了好久！快跟我讲讲它是什么呀？",
+            "让我凑近一点看看……你最喜欢它哪里呀？",
+        ])
 
     # 刚写完正典 → 郑重感谢，孩子的选择成为既定事实
     if s["canon_written"] and s["canon_written"][-1].get("_fresh", True):

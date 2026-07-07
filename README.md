@@ -4,21 +4,56 @@
 
 黑客松全套可运行 demo：**没有硬件也能完整演示** —— 网页就是玩偶（浏览器语音识别当麦克风、TTS 当喇叭），**没有 API key 也能完整演示** —— 内置规则引擎兜底，五层记忆、教材编织、数字生命全流程照跑。
 
-## 快速开始
+## 快速开始（uv 管理环境）
 
 ```bash
-./run.sh            # 安装依赖并启动，首次启动自动预埋一周演示数据
+./run.sh            # uv sync + 启动，首次启动自动预埋一周演示数据
 # 打开 http://localhost:8000
 ```
 
-可选：接入真模型（不配也能跑，自动降级到规则引擎）：
+## 模型接入（三级自动降级，demo 永远不会挂）
+
+按优先级自动选择，也可用 `LING_PROVIDER=openai|anthropic|mock` 强制指定：
+
+**1️⃣ OpenAI 兼容端点（推荐）** —— 设 `LING_OPENAI_BASE_URL` 即启用，本地和第三方都行。
+
+本地全模态 MiniCPM-o 4.5，用 [vLLM-omni](https://docs.vllm.ai/projects/vllm-omni/) 起服务：
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export LING_CHAT_MODEL=claude-opus-4-8      # 热路径对话（默认）
-export LING_WORKER_MODEL=claude-haiku-4-5   # 冷路径抽取/反思（默认，便宜够用）
+# GPU 机器上（模型 9B：SigLip2 + Whisper + CosyVoice2 + Qwen3-8B 底座）
+uv tool run --from vllm vllm serve openbmb/MiniCPM-o-4_5 --trust-remote-code --port 8001
+
+# 灵这边只要指过去：
+export LING_OPENAI_BASE_URL=http://localhost:8001/v1
+export LING_OPENAI_MODEL=openbmb/MiniCPM-o-4_5   # 默认值，可省
 ./run.sh
 ```
+
+OpenRouter / DeepSeek 等第三方托管同理：
+
+```bash
+export LING_OPENAI_BASE_URL=https://openrouter.ai/api/v1
+export LING_OPENAI_API_KEY=sk-or-...
+export LING_OPENAI_MODEL=deepseek/deepseek-chat
+```
+
+全模态模型（模型名含 minicpm-o / omni / vl / vision 等）自动开启聊天页的 📷 按钮——
+孩子把玩具举到摄像头前，玩偶真的能看见（视频帧理解）；DeepSeek 这类纯文本模型自动
+关闭，`LING_OPENAI_VISION=1/0` 可强制覆盖。
+
+**2️⃣ Claude** —— `export ANTHROPIC_API_KEY=sk-ant-...`（对话 `LING_CHAT_MODEL` 默认
+claude-opus-4-8，冷路径 `LING_WORKER_MODEL` 默认 claude-haiku-4-5）。
+
+**3️⃣ 规则引擎** —— 什么都不配就用它：零依赖零网络，五层记忆、教材编织、
+撤退规则、正典写回全流程照跑，纯软件兜底。
+
+### 全双工路线（硬件阶段的升级）
+
+MiniCPM-o 4.5 真正的全双工形态（连续音视频流、边听边说互不阻塞）走 OpenBMB 官方
+[MiniCPM-o-Demo](https://github.com/OpenBMB/MiniCPM-o-Demo) 的 WebSocket 网关
+（Gateway :8006 + GPU worker 池，Docker Compose 一键起）。届时本项目的会话服务
+挂到网关的 duplex 会话上：**开场记忆包照旧注入 system prompt，转写照旧落盘走冷路径**
+——记忆系统对上层是语音回合制还是全双工流式完全无感，这正是热/冷路径分离换来的。
 
 ## 三幕演示脚本
 
@@ -32,7 +67,7 @@ export LING_WORKER_MODEL=claude-haiku-4-5   # 冷路径抽取/反思（默认，
 
 ```
 ┌─ 热路径（实时，禁止 LLM 记忆调用）────────────────────┐
-│ 网页玩偶(ASR/TTS) → 会话服务 → LLM/规则引擎 → 回复      │
+│ 网页玩偶(ASR/TTS/📷) → 会话服务 → MiniCPM-o/Claude/规则引擎 │
 │        ↑ 开场一次性预取「记忆包」（纯 DB 读，<50ms）      │
 └──────────────────────┬──────────────────────────────┘
                        │ 转写落盘

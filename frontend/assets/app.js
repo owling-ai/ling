@@ -49,8 +49,12 @@ async function route() {
     a.classList.toggle("active", a.dataset.view === name));
   STATE = await api.get("/state");
   const badge = $("#llm-badge");
-  badge.textContent = STATE.llm.mode === "live"
-    ? `☁️ 云端模型 · ${STATE.llm.chat_model}` : "🛟 离线兜底 · 规则引擎";
+  const modelShort = (STATE.llm.chat_model || "").split("/").pop();
+  badge.textContent = {
+    openai: `${STATE.llm.vision ? "🎥 全模态" : "☁️ 云端"} · ${modelShort}`,
+    anthropic: `☁️ 云端模型 · ${STATE.llm.chat_model}`,
+    mock: "🛟 离线兜底 · 规则引擎",
+  }[STATE.llm.provider] || "🛟 离线兜底";
   badge.classList.toggle("live", STATE.llm.mode === "live");
   const view = VIEWS[name] || VIEWS.home;
   $("#view").innerHTML = '<div class="loading">加载中…</div>';
@@ -134,8 +138,10 @@ VIEWS.chat = async () => {
         </div>
       </div>
       <div class="chat-log" id="log"></div>
+      <div id="pending-img-bar"></div>
       <div class="chat-input">
         <button class="mic" id="mic-btn" title="按住说话（浏览器语音识别）">🎤</button>
+        <button class="mic" id="cam-btn" title="给玩偶看一样东西（摄像头，需要全模态引擎）">📷</button>
         <input id="chat-input" placeholder="以${esc(child.name || '孩子')}的身份说点什么…" autocomplete="off">
         <button class="primary" id="send-btn">发送</button>
       </div>
@@ -159,11 +165,11 @@ VIEWS.chat = async () => {
   </div>`;
 
   const log = $("#log");
-  const addMsg = (role, text) => {
+  const addMsg = (role, text, imgDataUrl) => {
     const div = document.createElement("div");
     div.className = "msg" + (role === "user" ? " mine" : "");
     div.innerHTML = `<div class="avatar">${role === "user" ? "🧒" : "🦊"}</div>
-      <div><div class="bubble">${role === "user" ? esc(text) : rich(text)}</div></div>`;
+      <div><div class="bubble">${imgDataUrl ? `<img src="${imgDataUrl}" class="bubble-img" alt="">` : ""}${role === "user" ? esc(text) : rich(text)}</div></div>`;
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
   };
@@ -194,8 +200,12 @@ VIEWS.chat = async () => {
 
   async function send(text) {
     text = (text || "").trim();
-    if (!text || !CHAT.sessionId) return;
-    addMsg("user", text);
+    if ((!text && !CHAT.pendingImage) || !CHAT.sessionId) return;
+    text = text || "你看这个！";
+    const img = CHAT.pendingImage;
+    CHAT.pendingImage = null;
+    renderPendingImg();
+    addMsg("user", text, img);
     $("#chat-input").value = "";
     // 孩子主动说出目标词 → 立刻点亮
     CHAT.agenda.forEach(a => {
@@ -203,7 +213,10 @@ VIEWS.chat = async () => {
         CHAT.produced.push(a.word);
     });
     typing(true);
-    const res = await api.post("/session/message", { session_id: CHAT.sessionId, text });
+    const res = await api.post("/session/message", {
+      session_id: CHAT.sessionId, text,
+      image_b64: img ? img.split(",")[1] : null,
+    });
     typing(false);
     CHAT.woven = res.woven || CHAT.woven;
     renderAgenda();
@@ -246,6 +259,51 @@ VIEWS.chat = async () => {
   } else {
     micBtn.onclick = () => toast("此浏览器不支持语音识别（试试 Chrome），先打字吧");
   }
+  // 摄像头：拍一帧给玩偶看（MiniCPM-o 这类全模态引擎能真的"看见"；离线引擎会好奇地追问）
+  function renderPendingImg() {
+    $("#pending-img-bar").innerHTML = CHAT.pendingImage
+      ? `<div class="pending-img"><img src="${CHAT.pendingImage}" alt="">
+         <span>将随下一条消息给${esc(doll.name || "灵灵")}看</span>
+         <button id="drop-img">✕</button></div>`
+      : "";
+    const drop = $("#drop-img");
+    if (drop) drop.onclick = () => { CHAT.pendingImage = null; renderPendingImg(); };
+  }
+  $("#cam-btn").onclick = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) { toast("此浏览器不支持摄像头"); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640 } });
+    } catch { toast("没拿到摄像头权限"); return; }
+    const video = document.createElement("video");
+    video.srcObject = stream; video.playsInline = true;
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    mask.innerHTML = `<div class="modal" style="max-width:520px">
+      <h2>📷 给${esc(doll.name || "灵灵")}看一样东西</h2>
+      <div id="cam-slot" style="border-radius:14px;overflow:hidden;background:#000"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+        <button id="cam-cancel">算了</button>
+        <button class="primary" id="cam-snap">咔嚓，就它了</button>
+      </div></div>`;
+    document.body.appendChild(mask);
+    $("#cam-slot", mask).appendChild(video);
+    video.style.width = "100%";
+    await video.play();
+    const cleanup = () => { stream.getTracks().forEach(t => t.stop()); mask.remove(); };
+    $("#cam-cancel", mask).onclick = cleanup;
+    $("#cam-snap", mask).onclick = () => {
+      const c = document.createElement("canvas");
+      const scale = Math.min(1, 448 / video.videoWidth);
+      c.width = Math.round(video.videoWidth * scale);
+      c.height = Math.round(video.videoHeight * scale);
+      c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
+      CHAT.pendingImage = c.toDataURL("image/jpeg", 0.82);
+      cleanup(); renderPendingImg();
+      if (!STATE.llm.vision) toast("当前是离线引擎，玩偶看不清画面，但会好奇地问你 😉");
+    };
+  };
+
   function speak(text) {
     if (!CHAT.ttsOn || !window.speechSynthesis) return;
     const u = new SpeechSynthesisUtterance(text.replace(/[（(].*?[)）]/g, ""));
@@ -541,7 +599,12 @@ VIEWS.setup = async () => {
 VIEWS.demo = async () => {
   $("#view").innerHTML = `
   <h1 class="page-title">演示控制台</h1>
-  <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。当前引擎：${STATE.llm.mode === "live" ? "☁️ " + esc(STATE.llm.chat_model) : "🛟 规则引擎（无 API key 纯软件兜底，全流程照跑）"}</p>
+  <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。当前引擎：${{
+    openai: (STATE.llm.vision ? "🎥 " : "☁️ ") + esc(STATE.llm.chat_model)
+      + (STATE.llm.vision ? "（全模态端点，支持摄像头画面）" : "（OpenAI 兼容端点）"),
+    anthropic: "☁️ " + esc(STATE.llm.chat_model),
+    mock: "🛟 规则引擎（无 API key 纯软件兜底，全流程照跑）",
+  }[STATE.llm.provider]}</p>
   <div class="card">
     <h2>🌙 冷路径任务</h2>
     <div class="demo-btns">

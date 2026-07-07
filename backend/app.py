@@ -109,6 +109,7 @@ def curriculum():
 class MessageBody(BaseModel):
     session_id: str
     text: str
+    image_b64: str | None = None   # 摄像头帧（JPEG base64），MiniCPM-o 这类全模态端点可用
 
 
 @app.post("/api/session/start")
@@ -121,7 +122,7 @@ def session_start():
 @app.post("/api/session/message")
 def session_message(body: MessageBody):
     try:
-        return engine.handle_message(body.session_id, body.text)
+        return engine.handle_message(body.session_id, body.text, body.image_b64)
     except KeyError:
         raise HTTPException(404, "会话不存在，请重新开始")
 

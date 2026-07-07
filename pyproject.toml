@@ -1,0 +1,13 @@
+[project]
+name = "ling"
+version = "0.1.0"
+description = "灵 Ling · 共同成长的玩偶 —— 五层记忆 + 教材编织 + 数字生命"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "anthropic>=0.40",
+]
+
+[tool.uv]
+package = false
