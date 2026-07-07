@@ -1,0 +1,62 @@
+{
+  "id": "pep-en-g3a",
+  "publisher": "人教 PEP",
+  "grade": "三年级",
+  "semester": "上册",
+  "title": "人教 PEP 英语 · 三年级上册",
+  "units": [
+    {
+      "unit": 4,
+      "title": "We love animals",
+      "theme": "animals",
+      "scene_tags": ["动物园", "森林", "宠物", "农场"],
+      "words": [
+        {"word": "panda", "ipa": "/ˈpændə/", "zh": "熊猫", "scene": "动物园"},
+        {"word": "monkey", "ipa": "/ˈmʌŋki/", "zh": "猴子", "scene": "动物园"},
+        {"word": "cat", "ipa": "/kæt/", "zh": "猫", "scene": "宠物"},
+        {"word": "dog", "ipa": "/dɒɡ/", "zh": "狗", "scene": "宠物"},
+        {"word": "duck", "ipa": "/dʌk/", "zh": "鸭子", "scene": "农场"},
+        {"word": "pig", "ipa": "/pɪɡ/", "zh": "猪", "scene": "农场"},
+        {"word": "bear", "ipa": "/beə/", "zh": "熊", "scene": "森林"},
+        {"word": "bird", "ipa": "/bɜːd/", "zh": "鸟", "scene": "森林"},
+        {"word": "tiger", "ipa": "/ˈtaɪɡə/", "zh": "老虎", "scene": "动物园"},
+        {"word": "elephant", "ipa": "/ˈelɪfənt/", "zh": "大象", "scene": "动物园"},
+        {"word": "zoo", "ipa": "/zuː/", "zh": "动物园", "scene": "动物园"},
+        {"word": "funny", "ipa": "/ˈfʌni/", "zh": "滑稽的、好笑的", "scene": "通用"}
+      ],
+      "patterns": [
+        {"pattern": "Look at the {animal}!", "zh": "快看那只{动物}！", "example": "Look at the panda!"},
+        {"pattern": "What's this? — It's a {animal}.", "zh": "这是什么？——是一只{动物}。", "example": "What's this? It's a duck."},
+        {"pattern": "It's so {adj}!", "zh": "它真{形容词}！", "example": "It's so funny!"}
+      ],
+      "function_sentences": [
+        {"en": "I like it!", "zh": "我喜欢它！"},
+        {"en": "Cool!", "zh": "真酷！"}
+      ]
+    },
+    {
+      "unit": 5,
+      "title": "Let's eat!",
+      "theme": "food",
+      "scene_tags": ["野餐", "厨房", "生日会"],
+      "words": [
+        {"word": "bread", "ipa": "/bred/", "zh": "面包", "scene": "野餐"},
+        {"word": "juice", "ipa": "/dʒuːs/", "zh": "果汁", "scene": "野餐"},
+        {"word": "egg", "ipa": "/eɡ/", "zh": "鸡蛋", "scene": "厨房"},
+        {"word": "milk", "ipa": "/mɪlk/", "zh": "牛奶", "scene": "厨房"},
+        {"word": "water", "ipa": "/ˈwɔːtə/", "zh": "水", "scene": "通用"},
+        {"word": "cake", "ipa": "/keɪk/", "zh": "蛋糕", "scene": "生日会"},
+        {"word": "fish", "ipa": "/fɪʃ/", "zh": "鱼", "scene": "厨房"},
+        {"word": "rice", "ipa": "/raɪs/", "zh": "米饭", "scene": "厨房"}
+      ],
+      "patterns": [
+        {"pattern": "I'd like some {food}, please.", "zh": "请给我一些{食物}。", "example": "I'd like some juice, please."},
+        {"pattern": "Have some {food}!", "zh": "吃点{食物}吧！", "example": "Have some bread!"}
+      ],
+      "function_sentences": [
+        {"en": "Thank you.", "zh": "谢谢。"},
+        {"en": "You're welcome.", "zh": "不客气。"}
+      ]
+    }
+  ]
+}
