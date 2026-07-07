@@ -13,6 +13,12 @@
 
 ## 模型接入（三级自动降级，demo 永远不会挂）
 
+所有环境变量都可以写进项目根目录的 `.env`，启动时自动读取（shell 里已有的变量优先）：
+
+```bash
+cp .env.example .env   # 然后按需填写
+```
+
 按优先级自动选择，也可用 `LING_PROVIDER=openai|anthropic|mock` 强制指定：
 
 **1️⃣ OpenAI 兼容端点（推荐）** —— 设 `LING_OPENAI_BASE_URL` 即启用，本地和第三方都行。
