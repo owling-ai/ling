@@ -5,17 +5,33 @@
 """
 import json
 import os
+from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, engine, life, llm, memory, seed, workers
+from . import db, engine, life, llm, memory, realtime, seed, workers
 
 app = FastAPI(title="灵 · 共同成长玩偶记忆服务")
 
-CHILD_ID = 1
+# 允许通过反代域名访问（默认放行 mm.liaoxingyi.com 和本机，可用 LING_CORS_ORIGINS 覆盖）
+_ORIGINS = os.environ.get(
+    "LING_CORS_ORIGINS",
+    "https://mm.liaoxingyi.com,http://mm.liaoxingyi.com,"
+    "http://localhost:8888,http://127.0.0.1:8888",
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _ORIGINS.split(",") if o.strip()],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+CHILD_ID = db.CHILD_ID
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
 
 
@@ -24,6 +40,11 @@ def startup():
     db.init_db()
     if not seed.is_seeded():
         seed.seed()
+    info = llm.mode_info()
+    rt = realtime.info()
+    print(f"[realtime] 交互内核 StepFun 实时语音：{'✅ ' + rt['model'] + ' · ' + rt['voice'] if rt['available'] else '❌ 未配置 STEPFUN_API_KEY，无法通话'}\n"
+          f"[llm] 冷路径（记忆工人）：{info['worker_provider']} · {info['worker_model']}",
+          flush=True)
 
 
 # ---------------------------------------------------------------- 基本状态
@@ -39,6 +60,7 @@ def state():
         "taboo": db.jloads(child["taboo_json"]) if child else [],
         "agenda_ready": agenda is not None and agenda["status"] == "ready",
         "llm": llm.mode_info(),
+        "realtime": realtime.info(),
     }
 
 
@@ -106,25 +128,11 @@ def curriculum():
 
 # ---------------------------------------------------------------- 会话（热路径）
 
-class MessageBody(BaseModel):
-    session_id: str
-    text: str
-    image_b64: str | None = None   # 摄像头帧（JPEG base64），MiniCPM-o 这类全模态端点可用
-
-
 @app.post("/api/session/start")
 def session_start():
     if not seed.is_seeded():
         raise HTTPException(400, "请先完成初始化")
     return engine.start_session(CHILD_ID)
-
-
-@app.post("/api/session/message")
-def session_message(body: MessageBody):
-    try:
-        return engine.handle_message(body.session_id, body.text, body.image_b64)
-    except KeyError:
-        raise HTTPException(404, "会话不存在，请重新开始")
 
 
 class EndBody(BaseModel):
@@ -139,6 +147,14 @@ def session_end(body: EndBody):
     result = workers.process_session(s["db_id"])
     engine.SESSIONS.pop(body.session_id, None)
     return result
+
+
+# ---------------------------------------------------------------- 实时语音（StepFun 全双工）
+
+@app.websocket("/api/realtime/ws")
+async def realtime_ws(ws: WebSocket, session_id: str):
+    """浏览器 ↔ StepFun 实时语音代理。转写会喂回 engine 的编织追踪器。"""
+    await realtime.bridge(ws, session_id)
 
 
 # ---------------------------------------------------------------- 记忆读取（家长控制台 / 线上分身共用）
@@ -189,7 +205,6 @@ def report():
     m = mastery()
     diaries = memory.list_diary(CHILD_ID, 7)
     snaps = memory.list_snapshots(CHILD_ID)
-    facts_rows = memory.list_facts(CHILD_ID)
     return {
         "mastery": m["summary"],
         "sessions_this_week": db.q1("SELECT COUNT(*) n FROM sessions WHERE child_id=?", (CHILD_ID,))["n"],
@@ -197,9 +212,7 @@ def report():
         "latest_snapshot": snaps[0] if snaps else None,
         "growth_moments": [
             {"before": f["text"], "after": f.get("superseded_by_text", "")}
-            for f in ({**r, "superseded_by_text": next(
-                (x["text"] for x in facts_rows if x["id"] == r["superseded_by"]), "")}
-                for r in facts_rows if r["superseded_by"])
+            for f in facts() if f["superseded_by"]
         ],
         "diary_series": [
             {"date": d["ts"][:10], "topics": d["topics"], "emotions": d["emotions"]}
@@ -211,7 +224,6 @@ def report():
 
 def _vocab_curve():
     """近 8 天「累计听懂 / 累计说出」曲线，按掌握度表的 last_seen 归到天。"""
-    from datetime import datetime, timedelta
     rows = db.q("SELECT level, last_seen FROM item_mastery WHERE child_id=? AND last_seen IS NOT NULL",
                 (CHILD_ID,))
     days = [(datetime.now() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7, -1, -1)]

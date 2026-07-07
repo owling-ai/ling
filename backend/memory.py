@@ -79,19 +79,6 @@ def list_facts(child_id: int, active_only: bool = False):
     return db.q(sql + " ORDER BY created_at DESC", (child_id,))
 
 
-def search_facts(child_id: int, text: str, limit: int = 5):
-    """轻量召回：关键词重叠打分（demo 不引向量库，保持零依赖）。"""
-    facts = list_facts(child_id, active_only=True)
-    if not text:
-        return facts[:limit]
-    scored = []
-    for f in facts:
-        score = sum(1 for token in set(f["text"]) & set(text) if not token.isascii())
-        scored.append((score, f))
-    scored.sort(key=lambda x: -x[0])
-    return [f for s, f in scored[:limit]]
-
-
 # ---------------------------------------------------------------- L4 成长快照
 
 def add_snapshot(child_id: int, period: str, interests=None, new_vocab=None,
@@ -120,7 +107,7 @@ def list_snapshots(child_id: int):
 
 # ---------------------------------------------------------------- 热路径记忆包
 
-def build_memory_pack(child_id: int, first_message: str = "") -> dict:
+def build_memory_pack(child_id: int) -> dict:
     """开场一次性预取：孩子卡 + 玩偶卡 + 昨日日记 + 相关事实 + 议程 + 分享事件 + 记忆钩子。
     纯 DB 读，禁止任何 LLM 调用。"""
     child = db.q1("SELECT * FROM children WHERE id=?", (child_id,)) or {}
@@ -153,7 +140,7 @@ def build_memory_pack(child_id: int, first_message: str = "") -> dict:
         "doll_card": get_card(child_id, "doll"),
         "taboo": db.jloads(child.get("taboo_json", "[]")),
         "yesterday_diary": yesterday["summary"] if yesterday else "",
-        "facts": [f["text"] for f in search_facts(child_id, first_message, limit=6)],
+        "facts": [f["text"] for f in list_facts(child_id, active_only=True)[:6]],
         "superseded_facts": superseded,
         "memory_hook": memory_hook,
         "canon": [f'{c["entity"]}：{c["fact_text"]}' for c in db.q(

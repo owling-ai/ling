@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 from . import db, life, memory
 
-CHILD_ID = 1
+CHILD_ID = db.CHILD_ID
 
 
 def _d(days_ago: int, hm: str = "19:30") -> str:

@@ -30,7 +30,7 @@ def process_session(session_id_db: int) -> dict:
     # ---- L2 日记
     diary = llm.worker_json(prompts.DIARY_PROMPT.format(
         doll_name=doll_card.get("name", "灵灵"), child_name=child_card.get("name", "孩子"),
-        transcript=transcript_text)) if llm.live_mode() else None
+        transcript=transcript_text)) if llm.worker_live() else None
     if not isinstance(diary, dict) or "summary" not in diary:
         diary = _mock_diary(child_card, child_msgs, doll_msgs)
     diary_id = memory.add_diary(
@@ -42,7 +42,7 @@ def process_session(session_id_db: int) -> dict:
              for f in memory.list_facts(child_id, active_only=True)]
     facts = llm.worker_json(prompts.FACTS_PROMPT.format(
         known_facts=json.dumps(known, ensure_ascii=False),
-        transcript=transcript_text)) if llm.live_mode() else None
+        transcript=transcript_text)) if llm.worker_live() else None
     if not isinstance(facts, list):
         facts = _mock_facts(child_msgs)
     new_facts = []
@@ -167,7 +167,7 @@ def reflect(child_id: int) -> dict:
         doll_name=doll_card.get("name", "灵灵"), child_name=child_card.get("name", "孩子"),
         diaries=json.dumps([{"ts": d["ts"], "summary": d["summary"], "topics": d["topics"],
                              "emotions": d["emotions"]} for d in diaries], ensure_ascii=False),
-        vocab_progress=json.dumps(vocab_progress, ensure_ascii=False))) if llm.live_mode() else None
+        vocab_progress=json.dumps(vocab_progress, ensure_ascii=False))) if llm.worker_live() else None
     if not isinstance(snap, dict) or "interests" not in snap:
         snap = _mock_reflect(child_card, doll_card, diaries, vocab_progress)
 

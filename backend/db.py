@@ -17,6 +17,8 @@ from datetime import datetime
 
 DB_PATH = os.environ.get("LING_DB", os.path.join(os.path.dirname(__file__), "..", "data", "ling.db"))
 
+CHILD_ID = 1  # 单孩 demo：全部模块共用这一个孩子
+
 _local = threading.local()
 
 

@@ -285,3 +285,17 @@ pre.json {
   background: #3d3229; color: #fff; border-radius: 999px; padding: 11px 24px;
   font-size: 14px; z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,.25);
 }
+
+/* ---------------- 视频聊天（伪全双工） ---------------- */
+.call-bar {
+  display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+  background: #2f2723; border-bottom: 1px solid var(--line);
+}
+.call-bar video { width: 150px; border-radius: 10px; display: block; background: #000; }
+.call-status { flex: 1; font-size: 13.5px; color: #f6ead9; }
+.call-status .hint { display: block; font-size: 11.5px; color: #bfa893; margin-top: 3px; }
+.call-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: #e5484d; margin-right: 7px; animation: pulse 1.2s infinite;
+}
+.call-bar .hangup { background: #e5484d; color: #fff; border: none; }

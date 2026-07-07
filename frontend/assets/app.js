@@ -1,4 +1,5 @@
-/* 灵 · 前端逻辑：hash 路由 + 六个视图 + 语音（Web Speech API，纯软件模拟玩偶硬件） */
+/* 灵 · 前端逻辑：hash 路由 + 六个视图。
+   交互内核 = StepFun 实时语音大模型（全双工语音）。前端只负责：展示对话转写 + 一个打字输入口。 */
 "use strict";
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -38,7 +39,7 @@ const STAGE_ZH = { new_friend: "刚认识的朋友", good_friend: "好朋友", b
 const LEVEL_ZH = { new: "还没学", exposed: "听到过", recognized: "听懂了", produced: "会说了" };
 
 let STATE = null;
-let CHAT = null; // { sessionId, agenda:[], woven:[], ttsOn }
+let CHAT = null; // { sessionId, agenda:[], woven:[], produced:[] }
 
 // ---------------------------------------------------------------- 路由
 
@@ -49,13 +50,10 @@ async function route() {
     a.classList.toggle("active", a.dataset.view === name));
   STATE = await api.get("/state");
   const badge = $("#llm-badge");
-  const modelShort = (STATE.llm.chat_model || "").split("/").pop();
-  badge.textContent = {
-    openai: `${STATE.llm.vision ? "🎥 全模态" : "☁️ 云端"} · ${modelShort}`,
-    anthropic: `☁️ 云端模型 · ${STATE.llm.chat_model}`,
-    mock: "🛟 离线兜底 · 规则引擎",
-  }[STATE.llm.provider] || "🛟 离线兜底";
-  badge.classList.toggle("live", STATE.llm.mode === "live");
+  badge.textContent = STATE.realtime?.available
+    ? `📞 ${STATE.realtime.model}`
+    : "😴 未配置 STEPFUN_API_KEY";
+  badge.classList.toggle("live", !!STATE.realtime?.available);
   const view = VIEWS[name] || VIEWS.home;
   $("#view").innerHTML = '<div class="loading">加载中…</div>';
   await view();
@@ -120,10 +118,25 @@ VIEWS.home = async () => {
 // ---------------------------------------------------------------- 聊天
 
 VIEWS.chat = async () => {
-  const doll = STATE.doll, child = STATE.child;
+  const doll = STATE.doll;
+
+  // 交互内核是 StepFun 实时语音；没配 key 就没有玩偶可聊，直说而不降级
+  if (!STATE.realtime?.available) {
+    $("#view").innerHTML = `
+    <h1 class="page-title">和${esc(doll.name || "灵灵")}聊天</h1>
+    <div class="card" style="text-align:center;padding:40px">
+      ${FOX(90)}
+      <h2 style="margin-top:14px">玩偶还没醒</h2>
+      <p style="color:var(--ink-2);max-width:420px;margin:8px auto 0">
+        灵靠 <b>StepFun 实时语音大模型</b>说话。请设置环境变量
+        <code>STEPFUN_API_KEY</code> 后刷新页面，就能直接和${esc(doll.name || "灵灵")}打语音电话了。</p>
+    </div>`;
+    return;
+  }
+
   $("#view").innerHTML = `
-  <h1 class="page-title">和${esc(doll.name || "灵灵")}聊天</h1>
-  <p class="page-sub">网页即玩偶 —— 没有硬件时，麦克风 🎤 和朗读 🔈 就是它的耳朵和嘴巴。</p>
+  <h1 class="page-title">和${esc(doll.name || "灵灵")}打电话</h1>
+  <p class="page-sub">网页即玩偶 —— 接通后<b>直接说话</b>，它说话时你开口就能打断（StepFun 实时语音大模型，真全双工）。下面的转写只是让你看见你们说了什么。</p>
   <div class="chat-wrap">
     <div class="chat-panel">
       <div class="chat-head">
@@ -133,18 +146,10 @@ VIEWS.chat = async () => {
           <div>${esc(STAGE_ZH[doll.relationship_stage] || "新朋友")} · 心情：开心 · Lv.${doll.growth_level || 1}</div>
         </div>
         <div class="actions">
-          <button id="tts-btn" title="朗读回复">🔈</button>
-          <button id="end-btn">结束会话</button>
+          <button id="end-btn" title="挂电话 · 整理今天的记忆 · 看成长">📞 结束通话</button>
         </div>
       </div>
       <div class="chat-log" id="log"></div>
-      <div id="pending-img-bar"></div>
-      <div class="chat-input">
-        <button class="mic" id="mic-btn" title="按住说话（浏览器语音识别）">🎤</button>
-        <button class="mic" id="cam-btn" title="给玩偶看一样东西（摄像头，需要全模态引擎）">📷</button>
-        <input id="chat-input" placeholder="以${esc(child.name || '孩子')}的身份说点什么…" autocomplete="off">
-        <button class="primary" id="send-btn">发送</button>
-      </div>
     </div>
     <div>
       <div class="side-card">
@@ -165,29 +170,27 @@ VIEWS.chat = async () => {
   </div>`;
 
   const log = $("#log");
-  const addMsg = (role, text, imgDataUrl) => {
+  const addMsg = (role, text) => {
     const div = document.createElement("div");
     div.className = "msg" + (role === "user" ? " mine" : "");
     div.innerHTML = `<div class="avatar">${role === "user" ? "🧒" : "🦊"}</div>
-      <div><div class="bubble">${imgDataUrl ? `<img src="${imgDataUrl}" class="bubble-img" alt="">` : ""}${role === "user" ? esc(text) : rich(text)}</div></div>`;
+      <div><div class="bubble">${role === "user" ? esc(text) : rich(text)}</div></div>`;
     log.appendChild(div);
     log.scrollTop = log.scrollHeight;
-  };
-  const typing = (on) => {
-    $(".typing")?.remove();
-    if (on) {
-      const d = document.createElement("div");
-      d.className = "typing"; d.textContent = `${doll.name || "灵灵"}正在想…`;
-      log.appendChild(d); log.scrollTop = log.scrollHeight;
-    }
+    return $(".bubble", div);   // 转写增量要往里追加
   };
 
-  // 开场：热路径记忆包 + 预生成开场白
+  // 语音通话（StepFun realtime）运行态
+  const RT = { on: false, ws: null, ctx: null, stream: null, node: null, src: null,
+               playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null };
+  const RT_RATE = STATE.realtime?.sample_rate || 24000;
+  let manualEnd = false;   // true = 用户主动结束/切页；意外断线（false）才自动重连
+
+  // 开场：热路径记忆包（realtime bridge 要靠这个 session 注入人设+记忆），随后自动接通语音。
+  // 开场白不在前端预渲染——实时模型接通后会自己把「记忆钩子」当第一句话说出来（见 prompts 硬规则）。
   const start = await api.post("/session/start");
-  CHAT = { sessionId: start.session_id, agenda: start.memory_pack.review_items || [], woven: [], produced: [], ttsOn: false };
+  CHAT = { sessionId: start.session_id, agenda: start.memory_pack.review_items || [], woven: [], produced: [] };
   renderAgenda();
-  addMsg("assistant", start.opening);
-  speak(start.opening);
 
   function renderAgenda() {
     $("#agenda-box").innerHTML = CHAT.agenda.filter(a => a.type === "word").map(a => {
@@ -198,118 +201,212 @@ VIEWS.chat = async () => {
     }).join("") || '<span class="chip ghost">今天没有复习议程</span>';
   }
 
-  async function send(text) {
-    text = (text || "").trim();
-    if ((!text && !CHAT.pendingImage) || !CHAT.sessionId) return;
-    text = text || "你看这个！";
-    const img = CHAT.pendingImage;
-    CHAT.pendingImage = null;
-    renderPendingImg();
-    addMsg("user", text, img);
-    $("#chat-input").value = "";
-    // 孩子主动说出目标词 → 立刻点亮
-    CHAT.agenda.forEach(a => {
-      if (a.type === "word" && new RegExp(`\\b${a.word}\\b`, "i").test(text) && !CHAT.produced.includes(a.word))
-        CHAT.produced.push(a.word);
-    });
-    typing(true);
-    const res = await api.post("/session/message", {
-      session_id: CHAT.sessionId, text,
-      image_b64: img ? img.split(",")[1] : null,
-    });
-    typing(false);
+  // 回合记账结果：后端把编织/正典/撤退状态随 ling.state 推回来。
+  // ling.state 每回合都来、状态是累计的，所以只在「首次跃迁」时提示一次，别刷屏。
+  const notified = { retreated: false, canonCount: 0 };
+  const finalize = (res) => {
     CHAT.woven = res.woven || CHAT.woven;
+    CHAT.produced = res.produced || CHAT.produced;
     renderAgenda();
-    addMsg("assistant", res.reply);
-    speak(res.reply);
-    if (res.canon_written?.length) toast("✍️ 孩子的决定已写进世界正典！去「灵灵的世界」看看");
-    if (res.retreated) toast("🛟 撤退规则触发：今天不再复习，纯陪伴模式");
-  }
+    const n = res.canon_written?.length || 0;
+    if (n > notified.canonCount) { notified.canonCount = n; toast("✍️ 孩子的决定已写进世界正典！去「灵灵的世界」看看"); }
+    if (res.retreated && !notified.retreated) { notified.retreated = true; toast("🛟 撤退规则触发：今天不再复习，纯陪伴模式"); }
+  };
 
-  $("#send-btn").onclick = () => send($("#chat-input").value);
-  $("#chat-input").addEventListener("keydown", e => { if (e.key === "Enter") send(e.target.value); });
-
-  // 结束会话 → 冷路径
+  // 结束通话 → 挂断语音 + 跑冷路径记忆工人。冷路径要调 LLM 写日记/抽事实，可能慢，
+  // 给即时反馈 + try/catch，别让界面看起来「点了没反应」。
   $("#end-btn").onclick = async () => {
     if (!CHAT.sessionId) return;
-    const res = await api.post("/session/end", { session_id: CHAT.sessionId });
-    CHAT.sessionId = null;
-    showColdResult(res);
+    manualEnd = true;
+    endRealtime();
+    const btn = $("#end-btn");
+    btn.disabled = true; btn.textContent = "整理今天的记忆…";
+    try {
+      const res = await api.post("/session/end", { session_id: CHAT.sessionId });
+      CHAT.sessionId = null;
+      showColdResult(res);
+    } catch (e) {
+      toast("整理记忆出错，稍后再试：" + (e?.message || e));
+      btn.disabled = false; btn.textContent = "📞 结束通话";
+    }
   };
 
-  // 语音：浏览器 ASR + TTS，纯软件替代玩偶麦克风/喇叭
-  $("#tts-btn").onclick = (e) => {
-    CHAT.ttsOn = !CHAT.ttsOn;
-    e.target.textContent = CHAT.ttsOn ? "🔊" : "🔈";
-    toast(CHAT.ttsOn ? "已开启玩偶朗读" : "已关闭朗读");
+  // ---- 语音通话（真·全双工）：StepFun 实时语音大模型，后端代理鉴权与记忆注入
+  // 上下行 pcm16 / 24kHz / 单声道 / base64；barge-in 靠 server_vad 的 speech_started
+  const b64FromInt16 = (i16) => {
+    const u8 = new Uint8Array(i16.buffer, i16.byteOffset, i16.byteLength);
+    let bin = "";
+    for (let i = 0; i < u8.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(bin);
   };
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const micBtn = $("#mic-btn");
-  if (SR) {
-    const rec = new SR();
-    rec.lang = "zh-CN"; rec.interimResults = false;
-    let recording = false;
-    micBtn.onclick = () => {
-      if (recording) { rec.stop(); return; }
-      recording = true; micBtn.classList.add("rec"); rec.start();
-    };
-    rec.onresult = (e) => send(e.results[0][0].transcript);
-    rec.onend = () => { recording = false; micBtn.classList.remove("rec"); };
-    rec.onerror = () => { recording = false; micBtn.classList.remove("rec"); toast("语音识别不可用，请打字"); };
-  } else {
-    micBtn.onclick = () => toast("此浏览器不支持语音识别（试试 Chrome），先打字吧");
+  const int16FromB64 = (b64) => {
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return new Int16Array(u8.buffer);
+  };
+  const resample = (f32, from, to) => {   // 线性插值，ctx 采样率拿不到 24k 时兜底
+    if (from === to) return f32;
+    const out = new Float32Array(Math.round(f32.length * to / from));
+    const step = from / to;
+    for (let i = 0; i < out.length; i++) {
+      const p = i * step, j = Math.floor(p), a = p - j;
+      out[i] = (f32[j] || 0) * (1 - a) + (f32[j + 1] || f32[j] || 0) * a;
+    }
+    return out;
+  };
+
+  const setRtStatus = (msg) => { const el = $("#rt-status"); if (el) el.textContent = msg; };
+
+  function rtStopPlayback() {
+    RT.sources.forEach(s => { try { s.stop(); } catch { } });
+    RT.sources = [];
+    RT.playHead = 0;
   }
-  // 摄像头：拍一帧给玩偶看（MiniCPM-o 这类全模态引擎能真的"看见"；离线引擎会好奇地追问）
-  function renderPendingImg() {
-    $("#pending-img-bar").innerHTML = CHAT.pendingImage
-      ? `<div class="pending-img"><img src="${CHAT.pendingImage}" alt="">
-         <span>将随下一条消息给${esc(doll.name || "灵灵")}看</span>
-         <button id="drop-img">✕</button></div>`
-      : "";
-    const drop = $("#drop-img");
-    if (drop) drop.onclick = () => { CHAT.pendingImage = null; renderPendingImg(); };
+
+  function rtPlayDelta(b64) {
+    const i16 = int16FromB64(b64);
+    if (!i16.length || !RT.ctx) return;
+    const f32 = new Float32Array(i16.length);
+    for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+    const buf = RT.ctx.createBuffer(1, f32.length, RT_RATE);   // WebAudio 会自动重采样到 ctx 频率
+    buf.getChannelData(0).set(f32);
+    const src = RT.ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(RT.ctx.destination);
+    const t = Math.max(RT.ctx.currentTime + 0.06, RT.playHead || 0);
+    src.start(t);
+    RT.playHead = t + buf.duration;
+    RT.sources.push(src);
+    src.onended = () => { const i = RT.sources.indexOf(src); if (i >= 0) RT.sources.splice(i, 1); };
   }
-  $("#cam-btn").onclick = async () => {
-    if (!navigator.mediaDevices?.getUserMedia) { toast("此浏览器不支持摄像头"); return; }
+
+  function rtSendChunk(f32) {   // 攒 ~100ms 再发，别把 WS 打成碎片雨
+    if (!RT.on || !RT.ws || RT.ws.readyState !== 1) return;
+    RT.buf.push(f32);
+    RT.bufLen += f32.length;
+    if (RT.bufLen < RT.ctx.sampleRate / 10) return;
+    let all = new Float32Array(RT.bufLen), off = 0;
+    RT.buf.forEach(b => { all.set(b, off); off += b.length; });
+    RT.buf = []; RT.bufLen = 0;
+    all = resample(all, RT.ctx.sampleRate, RT_RATE);
+    const i16 = new Int16Array(all.length);
+    for (let i = 0; i < all.length; i++)
+      i16[i] = Math.max(-32768, Math.min(32767, Math.round(all[i] * 32767)));
+    RT.ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64FromInt16(i16) }));
+  }
+
+  function rtHandleEvent(ev) {
+    switch (ev.type) {
+      case "session.created":
+      case "session.updated":   // 开场问候由后端注入人设后主动触发（realtime.py），前端不重复发
+        setRtStatus("已接通，直接说话吧"); break;
+      case "input_audio_buffer.speech_started":   // 孩子开口 → 立刻停播 + 掐断在讲的回复
+        rtStopPlayback();
+        if (RT.active) { RT.ws?.send(JSON.stringify({ type: "response.cancel" })); RT.active = null; }
+        setRtStatus("在听你说…"); break;
+      case "input_audio_buffer.speech_stopped":
+        setRtStatus("正在想…"); break;
+      case "conversation.item.input_audio_transcription.completed":
+        if (ev.transcript?.trim()) addMsg("user", ev.transcript.trim()); break;
+      case "response.created":
+        RT.active = ev.id || ev.response?.id || true;
+        RT.bubble = null; RT.text = ""; break;
+      case "response.audio.delta":
+        rtPlayDelta(ev.delta || "");
+        setRtStatus("正在说…"); break;
+      case "response.audio_transcript.delta":
+        if (!RT.bubble) RT.bubble = addMsg("assistant", "");
+        RT.text += ev.delta || "";
+        RT.bubble.innerHTML = rich(RT.text);
+        log.scrollTop = log.scrollHeight; break;
+      case "response.audio_transcript.done":
+        if (RT.bubble && ev.transcript) RT.bubble.innerHTML = rich(ev.transcript); break;
+      case "response.done":
+        RT.active = null;
+        setRtStatus("正在听…"); break;
+      case "ling.state":   // 后端记账结果：编织进度/正典/撤退，与文字模式同一套
+        finalize(ev); break;
+      case "ling.error":
+        toast(ev.message || "实时语音出错"); endRealtime(); break;
+      case "error":   // 上游非致命 error（会话仍在）：记 console 供排查，不弹给孩子看
+        console.warn("[realtime] 上游 error（非致命，忽略）", ev); break;
+    }
+  }
+
+  async function startRealtime() {
+    if (RT.on) return;
     let stream;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640 } });
-    } catch { toast("没拿到摄像头权限"); return; }
-    const video = document.createElement("video");
-    video.srcObject = stream; video.playsInline = true;
-    const mask = document.createElement("div");
-    mask.className = "modal-mask";
-    mask.innerHTML = `<div class="modal" style="max-width:520px">
-      <h2>📷 给${esc(doll.name || "灵灵")}看一样东西</h2>
-      <div id="cam-slot" style="border-radius:14px;overflow:hidden;background:#000"></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
-        <button id="cam-cancel">算了</button>
-        <button class="primary" id="cam-snap">咔嚓，就它了</button>
-      </div></div>`;
-    document.body.appendChild(mask);
-    $("#cam-slot", mask).appendChild(video);
-    video.style.width = "100%";
-    await video.play();
-    const cleanup = () => { stream.getTracks().forEach(t => t.stop()); mask.remove(); };
-    $("#cam-cancel", mask).onclick = cleanup;
-    $("#cam-snap", mask).onclick = () => {
-      const c = document.createElement("canvas");
-      const scale = Math.min(1, 448 / video.videoWidth);
-      c.width = Math.round(video.videoWidth * scale);
-      c.height = Math.round(video.videoHeight * scale);
-      c.getContext("2d").drawImage(video, 0, 0, c.width, c.height);
-      CHAT.pendingImage = c.toDataURL("image/jpeg", 0.82);
-      cleanup(); renderPendingImg();
-      if (!STATE.llm.vision) toast("当前是离线引擎，玩偶看不清画面，但会好奇地问你 😉");
-    };
-  };
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+      });
+    } catch { toast("没拿到麦克风权限，语音通话需要它"); return; }
+    RT.stream = stream;
+    try { RT.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RT_RATE }); }
+    catch { RT.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
+    await RT.ctx.resume();
 
-  function speak(text) {
-    if (!CHAT.ttsOn || !window.speechSynthesis) return;
-    const u = new SpeechSynthesisUtterance(text.replace(/[（(].*?[)）]/g, ""));
-    u.lang = "zh-CN"; u.rate = 1.02; u.pitch = 1.25;
-    speechSynthesis.cancel(); speechSynthesis.speak(u);
+    RT.on = true;
+    const bar = document.createElement("div");
+    bar.className = "call-bar"; bar.id = "rt-bar";
+    bar.innerHTML = `${FOX(46)}
+      <div class="call-status"><span class="call-dot"></span><b id="rt-status">正在接通…</b>
+        <span class="hint">StepFun 实时语音大模型 · 直接说话，它说话时你开口就能打断。戴耳机效果最好。</span></div>`;
+    log.parentNode.insertBefore(bar, log);
+
+    // 采集：AudioWorklet 优先，老浏览器退回 ScriptProcessor
+    RT.src = RT.ctx.createMediaStreamSource(stream);
+    const mute = RT.ctx.createGain(); mute.gain.value = 0;
+    if (RT.ctx.audioWorklet) {
+      const code = `class P extends AudioWorkletProcessor{process(inputs){const c=inputs[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor("ling-pcm",P)`;
+      await RT.ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([code], { type: "application/javascript" })));
+      RT.node = new AudioWorkletNode(RT.ctx, "ling-pcm");
+      RT.node.port.onmessage = (e) => rtSendChunk(e.data);
+    } else {
+      RT.node = RT.ctx.createScriptProcessor(4096, 1, 1);
+      RT.node.onaudioprocess = (e) => rtSendChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+    }
+    RT.src.connect(RT.node);
+    RT.node.connect(mute).connect(RT.ctx.destination);
+
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    const ws = new WebSocket(`${proto}${location.host}/api/realtime/ws?session_id=${CHAT.sessionId}`);
+    RT.ws = ws;
+    ws.onmessage = (e) => { let ev; try { ev = JSON.parse(e.data); } catch { return; } rtHandleEvent(ev); };
+    ws.onerror = () => { console.warn("[realtime] ws error（交给 onclose 处理）"); };
+    ws.onclose = () => {
+      if (!RT.on) return;
+      endRealtime();
+      // 意外断线（不是用户结束/切页）→ 自动重连，纯语音产品不该让孩子手动重拨
+      if (!manualEnd && CHAT.sessionId) { toast("语音断了，正在重连…"); setTimeout(() => { if (!manualEnd && CHAT.sessionId) startRealtime(); }, 800); }
+    };
+    toast("📞 正在接通 StepFun 实时语音…");
   }
+
+  function endRealtime() {
+    if (!RT.on) return;
+    RT.on = false;
+    rtStopPlayback();
+    try { RT.node?.disconnect(); RT.src?.disconnect(); } catch { }
+    if (RT.node?.port) RT.node.port.onmessage = null;
+    RT.node = RT.src = null;
+    RT.stream?.getTracks().forEach(t => t.stop());
+    RT.stream = null;
+    try { RT.ws?.close(); } catch { }
+    RT.ws = null;
+    RT.ctx?.close().catch(() => { });
+    RT.ctx = null;
+    RT.buf = []; RT.bufLen = 0; RT.bubble = null; RT.text = ""; RT.active = null;
+    $("#rt-bar")?.remove();
+  }
+
+  // 切到别的页面：主动挂断（标记 manualEnd，别触发自动重连）
+  window.addEventListener("hashchange", () => { manualEnd = true; endRealtime(); }, { once: true });
+
+  // 进入聊天页即接通语音——实时对话就是这个产品的交互内核，不是可选项
+  startRealtime();
 
   function showColdResult(res) {
     const d = res.diary || {};
@@ -599,12 +696,9 @@ VIEWS.setup = async () => {
 VIEWS.demo = async () => {
   $("#view").innerHTML = `
   <h1 class="page-title">演示控制台</h1>
-  <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。当前引擎：${{
-    openai: (STATE.llm.vision ? "🎥 " : "☁️ ") + esc(STATE.llm.chat_model)
-      + (STATE.llm.vision ? "（全模态端点，支持摄像头画面）" : "（OpenAI 兼容端点）"),
-    anthropic: "☁️ " + esc(STATE.llm.chat_model),
-    mock: "🛟 规则引擎（无 API key 纯软件兜底，全流程照跑）",
-  }[STATE.llm.provider]}</p>
+  <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。
+    交互内核：${STATE.realtime?.available ? "📞 " + esc(STATE.realtime.model) : "😴 StepFun 未配置"}
+    · 记忆工人：${esc(STATE.llm.worker_model)}</p>
   <div class="card">
     <h2>🌙 冷路径任务</h2>
     <div class="demo-btns">

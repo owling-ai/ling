@@ -3,4 +3,4 @@
 set -e
 cd "$(dirname "$0")"
 uv sync -q
-exec uv run uvicorn backend.app:app --host 0.0.0.0 --port 8000 "$@"
+exec uv run uvicorn backend.app:app --host 0.0.0.0 --port 8888 "$@"

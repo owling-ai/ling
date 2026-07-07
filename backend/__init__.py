@@ -6,6 +6,7 @@
 - 必须在任何子模块 import 之前执行（llm.py 在模块级读取这些变量）
 """
 import os
+import sys
 
 
 def _load_dotenv():
@@ -15,6 +16,7 @@ def _load_dotenv():
             lines = f.readlines()
     except FileNotFoundError:
         return
+    seen = set()
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -23,7 +25,13 @@ def _load_dotenv():
             line = line[len("export "):]
         key, _, value = line.partition("=")
         key, value = key.strip(), value.strip().strip("'\"")
-        if key and key not in os.environ:
+        if not key:
+            continue
+        if key in seen:
+            print(f"[env] ⚠️ .env 里 {key} 出现多次，只有第一行生效，后面的被忽略", file=sys.stderr)
+            continue
+        seen.add(key)
+        if key not in os.environ:
             os.environ[key] = value
 
 

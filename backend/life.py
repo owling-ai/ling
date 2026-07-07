@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 from . import db, llm, memory, prompts
 
-CHILD_ID = 1
+CHILD_ID = db.CHILD_ID
 
 
 # ---------------------------------------------------------------- SRS-lite
@@ -123,7 +123,7 @@ def life_tick(child_id: int = CHILD_ID) -> dict:
         next_beat=next_beat or "（无，自由发挥一件小事）",
         review_items=json.dumps([{"word": w["item_text"], "zh": w["item_zh"]} for w in review_words], ensure_ascii=False),
         child_topics=json.dumps(child_topics, ensure_ascii=False),
-    )) if llm.live_mode() else None
+    )) if llm.worker_live() else None
     if not isinstance(result, dict) or "text" not in result:
         result = _mock_life_event(doll_card, canon_rows, arc, next_beat, review_words, child_topics)
 
@@ -179,7 +179,7 @@ def night_planner(child_id: int = CHILD_ID, date: str | None = None) -> dict:
         d = diaries[0]
         result = llm.worker_json(prompts.HOOK_PROMPT.format(
             diary=json.dumps({"summary": d["summary"], "quotes": d["quotes"], "open_loop": d["open_loop"]},
-                             ensure_ascii=False))) if llm.live_mode() else None
+                             ensure_ascii=False))) if llm.worker_live() else None
         if isinstance(result, dict) and result.get("hook"):
             hook = result["hook"]
         elif d.get("open_loop"):
