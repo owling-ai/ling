@@ -9,7 +9,7 @@ const api = {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   }).then(r => r.json()),
-  del: (p) => fetch(`/api${p}`, { method: "DELETE" }).then(r => r.json()),
+  del: (p) => fetch(`/api${p}`, { method: "DELETE" }).then(r => r.ok ? r.json() : { ok: false }),
 };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 // 英文词高亮
@@ -66,6 +66,43 @@ function toast(msg) {
   t.className = "toast"; t.textContent = msg;
   document.body.appendChild(t);
   setTimeout(() => t.remove(), 2600);
+}
+
+// 冷路径记忆结算的成长卡片。挂到 body（不依赖某个页面），切页了也能弹出来。
+function showColdResult(res) {
+  const d = res.diary || {};
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.innerHTML = `<div class="modal">
+    <h2>🌙 冷路径记忆工人干完活了</h2>
+    <div class="sec"><h4>📔 新的一页日记（L2）</h4>
+      <div style="background:var(--leaf-soft);border-radius:12px;padding:10px 14px;font-size:14px">${esc(d.summary || "")}</div>
+      <div style="margin-top:6px">${(d.topics || []).map(t => `<span class="chip leaf">${esc(t)}</span>`).join("")}
+      ${(d.emotions || []).map(t => `<span class="chip coral">${esc(t)}</span>`).join("")}</div>
+      ${d.open_loop ? `<div style="font-size:13px;margin-top:6px;color:var(--ink-2)">🪝 明天的记忆钩子：「${esc(d.open_loop)}」</div>` : ""}
+    </div>
+    ${res.new_facts?.length ? `<div class="sec"><h4>💡 新记住的事实（L3）</h4>
+      ${res.new_facts.map(f => `<span class="chip sky">${esc(f)}</span>`).join("")}</div>` : ""}
+    ${res.mastery_updates?.length ? `<div class="sec"><h4>🎯 英语掌握度回写（SRS）</h4>
+      ${res.mastery_updates.map(m => `<span class="chip ${m.result === 'produced' ? 'leaf' : 'gold'}">${esc(m.word)} → ${LEVEL_ZH[m.result] || m.result}</span>`).join("")}</div>` : ""}
+    <div class="sec"><h4>💞 关系</h4>
+      <span class="chip violet">${esc(STAGE_ZH[res.relationship?.stage] || "")} · ${res.relationship?.xp ?? 0} XP${res.relationship?.leveled_up ? " · 升级啦！" : ""}</span></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button onclick="location.hash='parent';this.closest('.modal-mask').remove()">去家长控制台看看</button>
+      <button class="primary" onclick="this.closest('.modal-mask').remove()">好耶</button>
+    </div>
+  </div>`;
+  document.body.appendChild(mask);
+}
+
+// 结束通话后的冷路径结算：后台跑（写日记/抽事实/回写掌握度），可能慢。
+// 不 await、不阻塞界面——孩子/家长可以随便切页面，干完活了照样把成长卡片弹出来通知到。
+function runColdPath(sessionId) {
+  if (!sessionId) return;
+  toast("🌙 正在后台整理今天的记忆…可以先去别处逛逛");
+  api.post("/session/end", { session_id: sessionId })
+    .then(showColdResult)
+    .catch(e => toast("整理记忆出错，稍后再试：" + (e?.message || e)));
 }
 
 // ---------------------------------------------------------------- 今天（首页）
@@ -182,7 +219,8 @@ VIEWS.chat = async () => {
 
   // 语音通话（StepFun realtime）运行态
   const RT = { on: false, ws: null, ctx: null, stream: null, node: null, src: null,
-               playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null };
+               playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null,
+               userBubble: null };
   const RT_RATE = STATE.realtime?.sample_rate || 24000;
   let manualEnd = false;   // true = 用户主动结束/切页；意外断线（false）才自动重连
 
@@ -215,20 +253,15 @@ VIEWS.chat = async () => {
 
   // 结束通话 → 挂断语音 + 跑冷路径记忆工人。冷路径要调 LLM 写日记/抽事实，可能慢，
   // 给即时反馈 + try/catch，别让界面看起来「点了没反应」。
-  $("#end-btn").onclick = async () => {
+  $("#end-btn").onclick = () => {
     if (!CHAT.sessionId) return;
     manualEnd = true;
     endRealtime();
     const btn = $("#end-btn");
-    btn.disabled = true; btn.textContent = "整理今天的记忆…";
-    try {
-      const res = await api.post("/session/end", { session_id: CHAT.sessionId });
-      CHAT.sessionId = null;
-      showColdResult(res);
-    } catch (e) {
-      toast("整理记忆出错，稍后再试：" + (e?.message || e));
-      btn.disabled = false; btn.textContent = "📞 结束通话";
-    }
+    btn.disabled = true; btn.textContent = "整理今天的记忆…（可切换页面）";
+    // sessionId 先摘出来置空，防重复点击；冷路径后台跑，不阻塞、切页也能收到卡片
+    const sid = CHAT.sessionId; CHAT.sessionId = null;
+    runColdPath(sid);
   };
 
   // ---- 语音通话（真·全双工）：StepFun 实时语音大模型，后端代理鉴权与记忆注入
@@ -307,9 +340,19 @@ VIEWS.chat = async () => {
         if (RT.active) { RT.ws?.send(JSON.stringify({ type: "response.cancel" })); RT.active = null; }
         setRtStatus("在听你说…"); break;
       case "input_audio_buffer.speech_stopped":
-        setRtStatus("正在想…"); break;
-      case "conversation.item.input_audio_transcription.completed":
-        if (ev.transcript?.trim()) addMsg("user", ev.transcript.trim()); break;
+        setRtStatus("正在想…");
+        // 先占位孩子的气泡：ASR 转写常晚于 AI 回复到达，占位保证顺序（孩子说 → AI 答）
+        if (!RT.userBubble) RT.userBubble = addMsg("user", "");
+        break;
+      case "conversation.item.input_audio_transcription.completed": {
+        const t = ev.transcript?.trim();
+        if (RT.userBubble) {
+          if (t) RT.userBubble.textContent = t;
+          else RT.userBubble.closest(".msg")?.remove();   // 没识别到内容，撤掉占位
+          RT.userBubble = null;
+        } else if (t) { addMsg("user", t); }
+        log.scrollTop = log.scrollHeight; break;
+      }
       case "response.created":
         RT.active = ev.id || ev.response?.id || true;
         RT.bubble = null; RT.text = ""; break;
@@ -398,7 +441,7 @@ VIEWS.chat = async () => {
     RT.ws = null;
     RT.ctx?.close().catch(() => { });
     RT.ctx = null;
-    RT.buf = []; RT.bufLen = 0; RT.bubble = null; RT.text = ""; RT.active = null;
+    RT.buf = []; RT.bufLen = 0; RT.bubble = null; RT.text = ""; RT.active = null; RT.userBubble = null;
     $("#rt-bar")?.remove();
   }
 
@@ -407,32 +450,6 @@ VIEWS.chat = async () => {
 
   // 进入聊天页即接通语音——实时对话就是这个产品的交互内核，不是可选项
   startRealtime();
-
-  function showColdResult(res) {
-    const d = res.diary || {};
-    const mask = document.createElement("div");
-    mask.className = "modal-mask";
-    mask.innerHTML = `<div class="modal">
-      <h2>🌙 冷路径记忆工人干完活了</h2>
-      <div class="sec"><h4>📔 新的一页日记（L2）</h4>
-        <div style="background:var(--leaf-soft);border-radius:12px;padding:10px 14px;font-size:14px">${esc(d.summary || "")}</div>
-        <div style="margin-top:6px">${(d.topics || []).map(t => `<span class="chip leaf">${esc(t)}</span>`).join("")}
-        ${(d.emotions || []).map(t => `<span class="chip coral">${esc(t)}</span>`).join("")}</div>
-        ${d.open_loop ? `<div style="font-size:13px;margin-top:6px;color:var(--ink-2)">🪝 明天的记忆钩子：「${esc(d.open_loop)}」</div>` : ""}
-      </div>
-      ${res.new_facts?.length ? `<div class="sec"><h4>💡 新记住的事实（L3）</h4>
-        ${res.new_facts.map(f => `<span class="chip sky">${esc(f)}</span>`).join("")}</div>` : ""}
-      ${res.mastery_updates?.length ? `<div class="sec"><h4>🎯 英语掌握度回写（SRS）</h4>
-        ${res.mastery_updates.map(m => `<span class="chip ${m.result === 'produced' ? 'leaf' : 'gold'}">${esc(m.word)} → ${LEVEL_ZH[m.result] || m.result}</span>`).join("")}</div>` : ""}
-      <div class="sec"><h4>💞 关系</h4>
-        <span class="chip violet">${esc(STAGE_ZH[res.relationship?.stage] || "")} · ${res.relationship?.xp ?? 0} XP${res.relationship?.leveled_up ? " · 升级啦！" : ""}</span></div>
-      <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button onclick="location.hash='parent';this.closest('.modal-mask').remove()">去家长控制台看看</button>
-        <button class="primary" onclick="this.closest('.modal-mask').remove();window.dispatchEvent(new HashChangeEvent('hashchange'))">好耶</button>
-      </div>
-    </div>`;
-    document.body.appendChild(mask);
-  }
 };
 
 // ---------------------------------------------------------------- 灵灵的世界（线上分身）
@@ -564,8 +581,14 @@ VIEWS.parent = async () => {
   </div>`;
   drawGrowthChart($("#chart-box"), report.vocab_curve);
   document.querySelectorAll(".fact-row .del").forEach(b => b.onclick = async () => {
-    await api.del(`/facts/${b.dataset.id}`);
-    toast("已从记忆里删除"); route();
+    const row = b.closest(".fact-row");
+    b.disabled = true;
+    const r = await api.del(`/facts/${b.dataset.id}`).catch(() => ({ ok: false }));
+    if (!r || r.ok === false) { b.disabled = false; toast("删除失败，请重试"); return; }
+    // 原地淡出移除，保住滚动位置（不再整页 route() 回顶）
+    row.style.transition = "opacity .2s"; row.style.opacity = "0";
+    setTimeout(() => row.remove(), 200);
+    toast("已从记忆里删除");
   });
 };
 
