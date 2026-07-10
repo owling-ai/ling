@@ -2,13 +2,14 @@
 
 > 儿童/家庭场景里的共同成长型实体 agent。孩子在长大，它也在长大。
 
-黑客松全套可运行 demo：**没有硬件也能完整演示** —— 网页就是玩偶，接通就直接说话、随时打断（Gemini Live / StepFun Realtime，可在前端切换）。记忆系统（五层记忆、教材编织、数字生命）与语音链路解耦：**冷路径没有任何 API key 也照跑**，内置规则抽取器兜底。
+黑客松全套可运行 demo：**没有硬件也能完整演示** —— 网页就是玩偶，接通就直接说话、随时打断（Gemini Live / StepFun / 火山引擎 RTC，可在前端切换）。记忆系统（五层记忆、教材编织、数字生命）与语音链路解耦：**冷路径没有任何 API key 也照跑**，内置规则抽取器兜底。
 
 ## 快速开始（uv 管理环境）
 
 ```bash
 export GEMINI_API_KEY=...    # Gemini Live
 export STEPFUN_API_KEY=...   # 可选；配置后可在前端切换到 StepFun
+# 火山引擎为第三种可选接入，所需四项凭证见下文
 ./run.sh                     # uv sync + 启动，首次启动自动预埋一周演示数据
 # 打开 http://localhost:8888
 ```
@@ -21,9 +22,9 @@ export STEPFUN_API_KEY=...   # 可选；配置后可在前端切换到 StepFun
 cp .env.example .env   # 然后按需填写
 ```
 
-### 交互内核：Gemini Live / StepFun Realtime
+### 交互内核：Gemini Live / StepFun / 火山引擎 RTC
 
-配置任意一个 API key 即可通话；两个都配置时，聊天页可以实时切换模型。进入聊天页不会自动申请设备权限或连接模型，点击「接通」后才创建会话。默认使用支持音频与摄像头画面输入的预览模型 `gemini-3.1-flash-live-preview`；也保留 StepFun `stepaudio-2.5-realtime` 语音通道。模型一轮说完后连续安静约 20 秒，会触发一次轻量陪伴回应；下一次至少间隔 45 秒，每场最多两次。第一次禁止带记忆和学习，第二次也只有当前话题或画面自然相关时才可带一个词。
+配置任意一种后端凭证即可通话；配置多种时，聊天页可以实时切换模型。进入聊天页不会自动申请设备权限或连接模型，点击「接通」后才创建会话。默认使用支持音频与摄像头画面输入的预览模型 `gemini-3.1-flash-live-preview`；也保留 StepFun `stepaudio-2.5-realtime` 语音通道，并支持火山引擎「AI 音视频互动方案」。模型一轮说完后连续安静约 20 秒，会触发一次轻量陪伴回应；下一次至少间隔 45 秒，每场最多两次。第一次禁止带记忆和学习，第二次也只有当前话题或画面自然相关时才可带一个词。
 
 ```bash
 export GEMINI_API_KEY=...
@@ -39,7 +40,23 @@ export LING_REALTIME_PROVIDER=gemini
 export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-浏览器不直连模型服务：`/api/realtime/ws?provider=gemini|stepfun` 后端代理负责鉴权、协议转换、注入「人设 + 记忆包」，并截获双向转写喂给编织追踪器。Gemini 使用 16kHz 上行与 24kHz 下行 PCM；开启摄像头后，以 1 FPS 发送最长边 512px 的 JPEG 帧。StepFun 上下行均为 24kHz PCM，当前不发送视频。API key 不会下发到前端。
+Gemini 和 StepFun 仍通过 `/api/realtime/ws?provider=gemini|stepfun` 由后端代理。Gemini 使用 16kHz 上行与 24kHz 下行 PCM；开启摄像头后，以 1 FPS 发送最长边 512px 的 JPEG 帧。StepFun 上下行均为 24kHz PCM，当前不发送视频。API key 不会下发到前端。
+
+火山引擎采用官方 RTC 架构：浏览器通过项目内固定的 `@volcengine/rtc@4.68.5` 加入房间并发布麦克风/摄像头，后端签发一小时 RTC Token，再以 IAM AK/SK 签名调用 `StartVoiceChat`、`UpdateVoiceChat` 和 `StopVoiceChat`。浏览器不会收到 RTC AppKey、AK 或 SK。请在火山控制台创建 **AI 音视频互动方案**应用，不要使用另一个商品「实时对话式 AI」的 AppId：
+
+```bash
+export VOLCENGINE_RTC_APP_ID=...
+export VOLCENGINE_RTC_APP_KEY=...
+export VOLCENGINE_ACCESS_KEY=...
+export VOLCENGINE_SECRET_KEY=...
+export LING_REALTIME_PROVIDER=volcengine
+
+# 可选：按账号已开通的资源调整
+export LING_VOLC_ARK_MODEL=doubao-seed-2-1-turbo-260628
+export LING_VOLC_TTS_VOICE=zh_female_linjianvhai_moon_bigtts
+```
+
+火山默认使用 `doubao-seed-2-1-turbo-260628`，关闭深度思考并启用 ASR Prefill；视觉请求只携带最近一张 360p 低细节画面。还会用通话开始后的 4 秒目标语音自动建立临时声纹，并过滤其他说话人。摄像头打开后由 RTC 服务端按 1 秒间隔抽帧；正常问答会自动携带最近画面。冷场观察复用每场最多两次的预算，通过 `UpdateVoiceChat(ExternalTextToLLM, InterruptMode=2)` 检查缓存画面，不打断当前讲话。字幕按官方 `subv` 二进制协议解析，最终分句回传后端进入同一记忆闭环。实现依据为官方 [Web RTC 快速开始](https://www.volcengine.com/docs/6348/106914)、[Token 鉴权](https://www.volcengine.com/docs/6348/70121)、[StartVoiceChat](https://www.volcengine.com/docs/6348/2123348)、[视频和图片理解](https://www.volcengine.com/docs/6348/1408245) 与 [实时字幕](https://www.volcengine.com/docs/6348/2165060)。
 
 Gemini Live 的页面文字来自同一会话返回的 `inputAudioTranscription` / `outputAudioTranscription`。原生音频模型直接生成音频 token，转写是对音频的附带识别结果，不是用于合成声音的原始文本，因此可能在用词、断句和标点上与实际听到的内容略有差异。默认通过 `languageHints` 将候选语言限制在简体中文与美式英语，并把当次课程词、角色名加入 `adaptationPhrases`，降低中英混说被误判成韩文等其他语言的概率。可用 `LING_GEMINI_TRANSCRIPTION_LANGUAGES` 覆盖语言列表。
 
@@ -77,7 +94,7 @@ export LING_WORKER_MODEL=deepseek/deepseek-chat
 
 ```
 ┌─ 热路径（实时，禁止 LLM 记忆调用）────────────────────────┐
-│ 网页玩偶(麦克风/喇叭) ↔ /api/realtime/ws ↔ Gemini / StepFun │
+│ 网页玩偶 ↔ WS 代理 ↔ Gemini / StepFun；或 ↔ ByteRTC ↔ 火山 AI │
 │   开场一次性预取「记忆包」（纯 DB 读，<50ms）注入 instructions │
 │   双向转写截获 → 编织追踪器记账（曝光/识别/产出、撤退、正典）   │
 └──────────────────────┬───────────────────────────────┘
@@ -117,7 +134,11 @@ backend/
   db.py        SQLite schema（全部表）
   memory.py    L1-L4 读写 + 热路径记忆包组装
   engine.py    会话状态 + 编织追踪器（转写记账 / 撤退规则 / 正典写回）
-  realtime.py  Gemini / StepFun 双实时代理（鉴权 + 协议转换 + 转写截获）
+  realtime.py  Gemini / StepFun 实时代理（鉴权 + 协议转换 + 转写截获）
+  volcengine_rtc.py  火山 RTC Token + OpenAPI 控制面 + 字幕记账
+frontend/assets/
+  volcengine-rtc.min.js      官方 Web SDK 4.68.5
+  volcengine-rtc.LICENSE     SDK BSD-3-Clause 许可证
   llm.py       冷路径记忆工人 LLM 接入（OpenAI 兼容 / Anthropic，失败降级规则抽取器）
   prompts.py   全部 prompt 模板
   workers.py   冷路径：日记/事实/掌握度/反思

@@ -1,15 +1,20 @@
 /* 灵 · 前端逻辑：hash 路由 + 六个视图。
-   交互内核可切换 StepFun Realtime / Gemini Live；前端负责音频采集、播放和转写展示。 */
+   交互内核可切换 Gemini Live / StepFun / Volcengine RTC。 */
 "use strict";
 
 const $ = (sel, el = document) => el.querySelector(sel);
+const responseJSON = async (response) => {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
+  return data;
+};
 const api = {
-  get: (p) => fetch(`/api${p}`).then(r => r.json()),
+  get: (p) => fetch(`/api${p}`).then(responseJSON),
   post: (p, body) => fetch(`/api${p}`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
-  }).then(r => r.json()),
-  del: (p) => fetch(`/api${p}`, { method: "DELETE" }).then(r => r.ok ? r.json() : { ok: false }),
+  }).then(responseJSON),
+  del: (p) => fetch(`/api${p}`, { method: "DELETE" }).then(responseJSON),
 };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 // 英文词高亮
@@ -52,7 +57,7 @@ async function route() {
   const badge = $("#llm-badge");
   const liveProviders = Object.entries(STATE.realtime?.providers || {})
     .filter(([, config]) => config.available)
-    .map(([name]) => name === "gemini" ? "Gemini" : "StepFun");
+    .map(([name]) => ({ gemini: "Gemini", stepfun: "StepFun", volcengine: "火山 RTC" })[name] || name);
   badge.textContent = liveProviders.length
     ? `📞 ${liveProviders.join(" + ")}`
     : "😴 未配置实时模型";
@@ -160,8 +165,12 @@ VIEWS.home = async () => {
 VIEWS.chat = async () => {
   const doll = STATE.doll;
   const providers = STATE.realtime?.providers || {};
-  const providerLabel = name => name === "gemini" ? "Gemini Live" : "StepFun";
-  const providerButtonLabel = name => name === "gemini" ? "Gemini" : "StepFun";
+  const providerLabel = name => ({
+    gemini: "Gemini Live", stepfun: "StepFun", volcengine: "火山引擎 RTC",
+  })[name] || name;
+  const providerButtonLabel = name => ({
+    gemini: "Gemini", stepfun: "StepFun", volcengine: "火山 RTC",
+  })[name] || name;
   let selectedProvider = localStorage.getItem("ling-realtime-provider") || STATE.realtime?.default_provider || "gemini";
   if (!providers[selectedProvider]?.available) {
     selectedProvider = Object.keys(providers).find(name => providers[name].available) || selectedProvider;
@@ -175,8 +184,7 @@ VIEWS.chat = async () => {
       ${FOX(90)}
       <h2 style="margin-top:14px">玩偶还没醒</h2>
       <p style="color:var(--ink-2);max-width:440px;margin:8px auto 0">
-        请至少配置一个实时模型：<code>GEMINI_API_KEY</code> 或
-        <code>STEPFUN_API_KEY</code>，刷新页面后即可通话。</p>
+        请配置 Gemini、StepFun，或火山引擎 RTC 的后端凭证，刷新页面后即可通话。</p>
     </div>`;
     return;
   }
@@ -194,9 +202,9 @@ VIEWS.chat = async () => {
         </div>
         <div class="actions">
           <div class="model-switch" role="group" aria-label="实时语音模型">
-            ${["gemini", "stepfun"].map(name => `<button type="button" data-provider="${name}"
+            ${["gemini", "stepfun", "volcengine"].map(name => `<button type="button" data-provider="${name}"
               ${providers[name]?.available ? "" : "disabled"}
-              title="${providers[name]?.available ? esc(providers[name].model) : `${providerLabel(name)} 未配置 API key`}">
+              title="${providers[name]?.available ? esc(providers[name].model) : `${providerLabel(name)} 未配置后端凭证`}">
               ${providerButtonLabel(name)}</button>`).join("")}
           </div>
           <button id="video-btn" class="video-toggle" type="button" aria-pressed="false" title="开启摄像头">📹</button>
@@ -235,12 +243,13 @@ VIEWS.chat = async () => {
     return $(".bubble", div);   // 转写增量要往里追加
   };
 
-  // 两个上游共用同一运行态；切换 provider 时保留记忆 session，只重建语音连接。
-  const RT = { on: false, ws: null, ctx: null, stream: null, node: null, src: null,
+  // 三个上游共用记忆 session；火山使用 ByteRTC，其余使用内部 WebSocket 协议。
+  const RT = { on: false, provider: null, ws: null, ctx: null, stream: null, node: null, src: null,
                playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null,
-               userBubble: null, videoStream: null, videoEl: null, videoCanvas: null, videoTimer: null,
-               idleTimer: null, idleNudgesSent: 0, lastActivityAt: 0,
-               userSpeaking: false, lastVoiceAt: 0 };
+               userBubble: null, videoStream: null, videoActive: false, videoEl: null,
+               videoCanvas: null, videoTimer: null, rtcEngine: null, rtcInfo: null,
+               volcSubtitleBubbles: new Map(), idleTimer: null, idleNudgesSent: 0,
+               lastActivityAt: 0, userSpeaking: false, lastVoiceAt: 0 };
   const rtInputRate = () => selectedConfig().input_sample_rate || 24000;
   const rtOutputRate = () => selectedConfig().output_sample_rate || 24000;
   const IDLE_FIRST_MS = 20000, IDLE_NEXT_MS = 45000, IDLE_MAX_NUDGES = 2;
@@ -336,13 +345,26 @@ VIEWS.chat = async () => {
     if (!RT.on || RT.idleNudgesSent >= IDLE_MAX_NUDGES) return;
     const delay = RT.idleNudgesSent === 0 ? IDLE_FIRST_MS : IDLE_NEXT_MS;
     const remaining = Math.max(500, delay - (Date.now() - RT.lastActivityAt));
-    RT.idleTimer = setTimeout(() => {
+    RT.idleTimer = setTimeout(async () => {
       RT.idleTimer = null;
-      if (!RT.on || RT.active || RT.userSpeaking || !RT.ws || RT.ws.readyState !== 1) return;
-      RT.ws.send(JSON.stringify({ type: "ling.idle_nudge" }));
+      if (!RT.on || RT.active || RT.userSpeaking) return;
+      if (RT.rtcEngine && RT.rtcInfo) {
+        try {
+          const result = await api.post("/volcengine/observe", { session_id: CHAT.sessionId });
+          if (!result.ok) return;
+        } catch (error) {
+          console.warn("[volcengine] 画面观察触发失败", error);
+          RT.lastActivityAt = Date.now();
+          scheduleIdleNudge();
+          return;
+        }
+      } else {
+        if (!RT.ws || RT.ws.readyState !== 1) return;
+        RT.ws.send(JSON.stringify({ type: "ling.idle_nudge" }));
+      }
       RT.idleNudgesSent += 1;
       RT.lastActivityAt = Date.now();
-      setRtStatus("有点安静，灵灵在想怎么陪你…");
+      setRtStatus("有点安静，灵灵在看看怎么陪你…");
     }, remaining);
   }
 
@@ -356,20 +378,25 @@ VIEWS.chat = async () => {
     const button = $("#video-btn");
     if (!button) return;
     const supported = !!selectedConfig().supports_video;
-    const active = !!RT.videoStream;
+    const active = RT.videoActive;
     button.disabled = !supported || !RT.on;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", active ? "true" : "false");
     button.title = supported
-      ? (active ? "关闭摄像头" : "开启摄像头，让 Gemini 看见画面")
+      ? (active ? "关闭摄像头" : `开启摄像头，让${providerLabel(selectedProvider)}看见画面`)
       : `${providerLabel(selectedProvider)} 不支持视频输入`;
   }
 
   function stopVideo() {
     if (RT.videoTimer) clearInterval(RT.videoTimer);
     RT.videoTimer = null;
+    if (RT.rtcEngine) {
+      RT.rtcEngine.stopVideoCapture().catch(() => {});
+      try { RT.rtcEngine.setLocalVideoPlayer(window.VERTC.StreamIndex.STREAM_INDEX_MAIN); } catch { }
+    }
     RT.videoStream?.getTracks().forEach(track => track.stop());
     RT.videoStream = null;
+    RT.videoActive = false;
     RT.videoEl?.remove();
     RT.videoEl = null;
     RT.videoCanvas = null;
@@ -400,7 +427,28 @@ VIEWS.chat = async () => {
       toast(`${providerLabel(selectedProvider)} 暂不支持视频输入`); return;
     }
     if (!RT.on) { toast("语音接通后才能开启摄像头"); return; }
-    if (RT.videoStream) return;
+    if (RT.videoActive) return;
+    if (RT.rtcEngine) {
+      const mount = document.createElement("div");
+      mount.className = "rtc-local-video";
+      mount.id = `rtc-local-${Date.now()}`;
+      const bar = $("#rt-bar");
+      if (bar) { bar.prepend(mount); bar.classList.add("has-video"); }
+      try {
+        await RT.rtcEngine.startVideoCapture();
+        RT.rtcEngine.setLocalVideoMirrorType(window.VERTC.MirrorType.MIRROR_TYPE_RENDER);
+        RT.rtcEngine.setLocalVideoPlayer(window.VERTC.StreamIndex.STREAM_INDEX_MAIN, { renderDom: mount });
+        RT.videoEl = mount;
+        RT.videoActive = true;
+        syncVideoButton();
+        setRtStatus("视频已开启，火山引擎正在看和听…");
+      } catch (error) {
+        mount.remove();
+        toast("没拿到摄像头权限");
+        console.warn("[volcengine] 开启视频失败", error);
+      }
+      return;
+    }
     const providerAtStart = selectedProvider;
     let stream;
     try {
@@ -415,7 +463,7 @@ VIEWS.chat = async () => {
     video.className = "live-video";
     video.srcObject = stream;
     video.autoplay = true; video.muted = true; video.playsInline = true;
-    RT.videoStream = stream; RT.videoEl = video;
+    RT.videoStream = stream; RT.videoEl = video; RT.videoActive = true;
     const bar = $("#rt-bar");
     if (bar) { bar.prepend(video); bar.classList.add("has-video"); }
     await video.play();
@@ -532,8 +580,140 @@ VIEWS.chat = async () => {
     }
   }
 
+  async function ensureChatSession() {
+    if (CHAT.sessionId) return true;
+    try {
+      const start = await api.post("/session/start");
+      CHAT = { sessionId: start.session_id, agenda: start.memory_pack.review_items || [], woven: [], produced: [] };
+      RT.idleNudgesSent = 0;
+      renderAgenda();
+      return true;
+    } catch (error) {
+      console.warn("[realtime] 会话创建失败", error);
+      toast("会话创建失败，请重试");
+      return false;
+    }
+  }
+
+  function showCallBar() {
+    $("#rt-bar")?.remove();
+    const bar = document.createElement("div");
+    bar.className = "call-bar"; bar.id = "rt-bar";
+    bar.innerHTML = `${FOX(46)}
+      <div class="call-status"><span class="call-dot"></span><b id="rt-status">正在接通…</b>
+        <span class="hint">${providerLabel(selectedProvider)} · ${esc(selectedConfig().model || "")} · 直接说话，开口即可打断。戴耳机效果最好。</span></div>`;
+    log.parentNode.insertBefore(bar, log);
+  }
+
+  function decodeVolcSubtitle(message) {
+    let bytes;
+    if (message instanceof ArrayBuffer) bytes = new Uint8Array(message);
+    else if (ArrayBuffer.isView(message)) bytes = new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
+    else return null;
+    if (bytes.length < 8 || new TextDecoder().decode(bytes.subarray(0, 4)) !== "subv") return null;
+    const length = new DataView(bytes.buffer, bytes.byteOffset + 4, 4).getUint32(0, false);
+    if (length + 8 > bytes.length) return null;
+    try { return JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + length))); }
+    catch { return null; }
+  }
+
+  function handleVolcSubtitle(message) {
+    const payload = decodeVolcSubtitle(message);
+    if (!payload || payload.type !== "subtitle" || !RT.rtcInfo) return;
+    for (const item of payload.data || []) {
+      const role = item.userId === RT.rtcInfo.user_id ? "user"
+        : item.userId === RT.rtcInfo.bot_id ? "assistant" : null;
+      if (!role) continue;
+      const text = String(item.text || "").trim();
+      const key = `${role}:${item.roundId ?? 0}`;
+      let bubble = RT.volcSubtitleBubbles.get(key);
+      if (text) {
+        if (!bubble) {
+          bubble = addMsg(role, "");
+          RT.volcSubtitleBubbles.set(key, bubble);
+        }
+        bubble.innerHTML = role === "user" ? esc(text) : rich(text);
+      }
+      if (role === "user") {
+        RT.userSpeaking = !item.definite;
+        setRtStatus(item.definite ? "正在想…" : "在听你说…");
+      } else {
+        RT.active = item.definite ? null : key;
+        setRtStatus(item.definite ? "正在听…" : "正在说…");
+      }
+      noteActivity(!!item.definite);
+      if (item.definite && text) {
+        api.post("/volcengine/subtitle", {
+          session_id: CHAT.sessionId,
+          speaker_id: item.userId,
+          text,
+          sequence: item.sequence || 0,
+          round_id: item.roundId || 0,
+          definite: true,
+        }).then(result => { if (result.state) finalize(result.state); })
+          .catch(error => console.warn("[volcengine] 字幕记账失败", error));
+      }
+    }
+  }
+
+  async function startVolcengine() {
+    if (!window.VERTC?.createEngine) {
+      toast("火山 RTC SDK 加载失败");
+      return false;
+    }
+    if (!await ensureChatSession()) return false;
+    try {
+      const info = await api.post("/volcengine/prepare", { session_id: CHAT.sessionId });
+      const rtc = window.VERTC.createEngine(info.app_id);
+      RT.rtcEngine = rtc;
+      RT.rtcInfo = info;
+      RT.provider = "volcengine";
+      RT.volcSubtitleBubbles.clear();
+      rtc.on(window.VERTC.events.onRoomBinaryMessageReceived, event => handleVolcSubtitle(event.message));
+      rtc.on(window.VERTC.events.onUserJoined, event => {
+        if (event.userInfo?.userId === info.bot_id) setRtStatus("已接通，直接说话吧");
+      });
+      rtc.on(window.VERTC.events.onUserPublishStream, event => {
+        if (event.userId === info.bot_id) setRtStatus("已接通，正在听…");
+      });
+      rtc.on(window.VERTC.events.onAutoplayFailed, () => {
+        rtc.play(info.bot_id, window.VERTC.MediaType.AUDIO).catch(() => {});
+      });
+      rtc.on(window.VERTC.events.onTokenWillExpire, async () => {
+        try {
+          const renewed = await api.post("/volcengine/prepare", { session_id: CHAT.sessionId });
+          await rtc.updateToken(renewed.token);
+        } catch (error) { console.warn("[volcengine] Token 更新失败", error); }
+      });
+      rtc.on(window.VERTC.events.onError, error => console.warn("[volcengine] RTC error", error));
+
+      showCallBar();
+      await rtc.joinRoom(info.token, info.room_id, { userId: info.user_id }, {
+        isAutoPublish: true,
+        isAutoSubscribeAudio: true,
+        isAutoSubscribeVideo: false,
+      });
+      await rtc.startAudioCapture();
+      RT.on = true;
+      RT.userSpeaking = false;
+      RT.lastVoiceAt = 0;
+      syncCallButtons();
+      await api.post("/volcengine/start", { session_id: CHAT.sessionId });
+      noteActivity(true);
+      setRtStatus("已接通，直接说话吧");
+      toast(`📞 已接通 ${providerLabel(selectedProvider)}`);
+      return true;
+    } catch (error) {
+      console.warn("[volcengine] 接通失败", error);
+      toast("火山引擎接通失败：" + (error?.message || error));
+      endRealtime();
+      return false;
+    }
+  }
+
   async function startRealtime() {
     if (RT.on) return true;
+    if (selectedProvider === "volcengine") return startVolcengine();
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -541,17 +721,9 @@ VIEWS.chat = async () => {
       });
     } catch { toast("没拿到麦克风权限，语音通话需要它"); return false; }
 
-    if (!CHAT.sessionId) {
-      try {
-        const start = await api.post("/session/start");
-        CHAT = { sessionId: start.session_id, agenda: start.memory_pack.review_items || [], woven: [], produced: [] };
-        RT.idleNudgesSent = 0;
-        renderAgenda();
-      } catch {
-        stream.getTracks().forEach(track => track.stop());
-        toast("会话创建失败，请重试");
-        return false;
-      }
+    if (!await ensureChatSession()) {
+      stream.getTracks().forEach(track => track.stop());
+      return false;
     }
 
     RT.stream = stream;
@@ -560,16 +732,12 @@ VIEWS.chat = async () => {
     await RT.ctx.resume();
 
     RT.on = true;
+    RT.provider = selectedProvider;
     RT.userSpeaking = false;
     RT.lastVoiceAt = 0;
     noteActivity(false);
     syncCallButtons();
-    const bar = document.createElement("div");
-    bar.className = "call-bar"; bar.id = "rt-bar";
-    bar.innerHTML = `${FOX(46)}
-      <div class="call-status"><span class="call-dot"></span><b id="rt-status">正在接通…</b>
-        <span class="hint">${providerLabel(selectedProvider)} · ${esc(selectedConfig().model || "")} · 直接说话，开口即可打断。戴耳机效果最好。</span></div>`;
-    log.parentNode.insertBefore(bar, log);
+    showCallBar();
 
     // 采集：AudioWorklet 优先，老浏览器退回 ScriptProcessor
     RT.src = RT.ctx.createMediaStreamSource(stream);
@@ -604,8 +772,22 @@ VIEWS.chat = async () => {
   function endRealtime() {
     stopVideo();
     clearIdleTimer();
-    if (!RT.on) { syncCallButtons(); return; }
+    if (!RT.on && !RT.rtcEngine) { syncCallButtons(); return; }
     RT.on = false;
+    if (RT.rtcEngine) {
+      const rtc = RT.rtcEngine;
+      const sid = CHAT?.sessionId;
+      RT.rtcEngine = null;
+      RT.rtcInfo = null;
+      RT.volcSubtitleBubbles.clear();
+      if (sid) api.post("/volcengine/stop", { session_id: sid })
+        .catch(error => console.warn("[volcengine] 停止 AI 失败", error));
+      (async () => {
+        try { await rtc.stopAudioCapture(); } catch { }
+        try { await rtc.leaveRoom(); } catch { }
+        try { window.VERTC.destroyEngine(rtc); } catch { }
+      })();
+    }
     rtStopPlayback();
     try { RT.node?.disconnect(); RT.src?.disconnect(); } catch { }
     if (RT.node?.port) RT.node.port.onmessage = null;
@@ -616,6 +798,7 @@ VIEWS.chat = async () => {
     RT.ws = null;
     RT.ctx?.close().catch(() => { });
     RT.ctx = null;
+    RT.provider = null;
     RT.buf = []; RT.bufLen = 0; RT.bubble = null; RT.text = ""; RT.active = null; RT.userBubble = null;
     $("#rt-bar")?.remove();
     syncCallButtons();
@@ -633,7 +816,7 @@ VIEWS.chat = async () => {
       button.classList.toggle("active", button.dataset.provider === selectedProvider));
     syncVideoButton();
   }
-  $("#video-btn").onclick = () => RT.videoStream ? stopVideo() : startVideo();
+  $("#video-btn").onclick = () => RT.videoActive ? stopVideo() : startVideo();
   document.querySelectorAll("[data-provider]").forEach(button => button.onclick = async () => {
     const next = button.dataset.provider;
     if (next === selectedProvider || !providers[next]?.available) return;
@@ -927,7 +1110,7 @@ VIEWS.demo = async () => {
   $("#view").innerHTML = `
   <h1 class="page-title">演示控制台</h1>
   <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。
-    交互内核：${STATE.realtime?.available ? "📞 StepFun / Gemini Live" : "😴 实时模型未配置"}
+    交互内核：${STATE.realtime?.available ? "📞 Gemini / StepFun / 火山 RTC" : "😴 实时模型未配置"}
     · 记忆工人：${esc(STATE.llm.worker_model)}</p>
   <div class="card">
     <h2>🌙 冷路径任务</h2>

@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from . import db, engine, life, llm, memory, realtime, seed, workers  # noqa: E402
+from . import db, engine, life, llm, memory, realtime, seed, volcengine_rtc, workers  # noqa: E402
 
 app = FastAPI(title="灵 · 共同成长玩偶记忆服务")
 
@@ -156,12 +156,81 @@ def session_end(body: EndBody):
     return result
 
 
-# ---------------------------------------------------------------- 实时语音（StepFun / Gemini Live）
+# ---------------------------------------------------------------- 实时音视频（StepFun / Gemini Live / Volcengine RTC）
 
 @app.websocket("/api/realtime/ws")
 async def realtime_ws(ws: WebSocket, session_id: str, provider: str | None = None):
-    """浏览器与选定实时模型之间的代理，转写会喂回记忆引擎。"""
+    """浏览器与选定 WebSocket 实时模型之间的代理。"""
     await realtime.bridge(ws, session_id, provider)
+
+
+class VolcSessionBody(BaseModel):
+    session_id: str
+
+
+class VolcSubtitleBody(BaseModel):
+    session_id: str
+    speaker_id: str
+    text: str = ""
+    sequence: int = 0
+    round_id: int = 0
+    definite: bool = False
+
+
+@app.post("/api/volcengine/prepare")
+def volcengine_prepare(body: VolcSessionBody):
+    """Issue a short-lived ByteRTC token after the user clicks Connect."""
+    try:
+        return volcengine_rtc.prepare(body.session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+@app.post("/api/volcengine/start")
+def volcengine_start(body: VolcSessionBody):
+    """Start the AI after the browser has joined and published audio."""
+    try:
+        return volcengine_rtc.start(body.session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/api/volcengine/observe")
+def volcengine_observe(body: VolcSessionBody):
+    """Use one idle budget to inspect cached video without interrupting."""
+    try:
+        return volcengine_rtc.observe(body.session_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.post("/api/volcengine/subtitle")
+def volcengine_subtitle(body: VolcSubtitleBody):
+    try:
+        return volcengine_rtc.record_subtitle(
+            body.session_id,
+            body.speaker_id,
+            body.text,
+            body.sequence,
+            body.round_id,
+            body.definite,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/volcengine/stop")
+def volcengine_stop(body: VolcSessionBody):
+    try:
+        return volcengine_rtc.stop(body.session_id)
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
 
 
 # ---------------------------------------------------------------- 记忆读取（家长控制台 / 线上分身共用）

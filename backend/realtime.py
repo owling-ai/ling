@@ -1,4 +1,4 @@
-"""StepFun Realtime 与 Gemini Live 双提供商语音代理。
+"""StepFun Realtime 与 Gemini Live WebSocket 语音代理。
 
 浏览器只使用一套 OpenAI Realtime 风格的内部事件协议；本模块按 provider 把它转换成
 StepFun 或 Gemini Live 的上游协议。API key 始终只存在于后端。
@@ -53,6 +53,18 @@ PROVIDER_INFO = {
         "output_sample_rate": 24000,
         "supports_video": True,
     },
+    "volcengine": {
+        "model": os.environ.get(
+            "LING_VOLC_ARK_MODEL", "doubao-seed-2-1-turbo-260628"
+        ),
+        "voice": os.environ.get(
+            "LING_VOLC_TTS_VOICE", "zh_female_linjianvhai_moon_bigtts"
+        ),
+        "input_sample_rate": 48000,
+        "output_sample_rate": 48000,
+        "supports_video": True,
+        "transport": "bytedrtc",
+    },
 }
 
 STEPFUN_CLIENT_EVENTS = {
@@ -84,6 +96,16 @@ def provider_available(provider: str) -> bool:
         return bool(os.environ.get("GEMINI_API_KEY"))
     if provider == "stepfun":
         return bool(os.environ.get("STEPFUN_API_KEY"))
+    if provider == "volcengine":
+        return all(
+            os.environ.get(name)
+            for name in (
+                "VOLCENGINE_RTC_APP_ID",
+                "VOLCENGINE_RTC_APP_KEY",
+                "VOLCENGINE_ACCESS_KEY",
+                "VOLCENGINE_SECRET_KEY",
+            )
+        )
     return False
 
 
@@ -95,6 +117,8 @@ def default_provider() -> str:
         return "gemini"
     if provider_available("stepfun"):
         return "stepfun"
+    if provider_available("volcengine"):
+        return "volcengine"
     return configured if configured in PROVIDER_INFO else "gemini"
 
 
@@ -672,7 +696,11 @@ async def bridge(client, session_id: str, provider: str | None = None):
         await client.close()
         return
     if not provider_available(provider):
-        env_name = "GEMINI_API_KEY" if provider == "gemini" else "STEPFUN_API_KEY"
+        env_name = {
+            "gemini": "GEMINI_API_KEY",
+            "stepfun": "STEPFUN_API_KEY",
+            "volcengine": "VOLCENGINE_RTC_APP_ID / APP_KEY / ACCESS_KEY / SECRET_KEY",
+        }[provider]
         await _send_json(
             client,
             {"type": "ling.error", "message": f"没设 {env_name}，{provider} 不可用"},
@@ -686,6 +714,8 @@ async def bridge(client, session_id: str, provider: str | None = None):
         return
 
     try:
+        if provider == "volcengine":
+            raise RuntimeError("Volcengine uses the ByteRTC REST control plane")
         if provider == "gemini":
             await _bridge_gemini(client, session_id, session["pack"])
         else:
