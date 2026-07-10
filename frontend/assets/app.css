@@ -149,6 +149,7 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 .chat-head .who b { font-size: 17px; }
 .chat-head .who div { font-size: 12.5px; color: var(--ink-2); }
 .chat-head .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.chat-head button[hidden] { display: none; }
 .model-switch {
   display: grid; grid-template-columns: 1fr 1fr; width: 206px; height: 38px;
   padding: 3px; border: 1px solid #e7d7c4; border-radius: 8px; background: rgba(255,255,255,.72);
@@ -159,11 +160,15 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 }
 .model-switch button.active { background: var(--surface); color: var(--coral-deep); box-shadow: 0 1px 5px rgba(94,66,41,.14); }
 .model-switch button:disabled { opacity: .38; }
+.video-toggle { width: 40px; height: 38px; padding: 0; border-radius: 8px; flex: 0 0 40px; font-size: 17px; }
+.video-toggle.active { color: #1a7f4e; border-color: #91d3b2; background: #e8f8ef; box-shadow: inset 0 0 0 1px #b7e4cb; }
 .chat-log { height: 430px; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; background: var(--surface-2); }
 @media (max-width: 720px) {
   .chat-head { flex-wrap: wrap; }
   .chat-head .actions { width: 100%; margin-left: 0; }
+  .chat-head .actions > #end-btn { padding-inline: 14px; }
   .model-switch { flex: 1; width: auto; }
+  .model-switch button { padding-inline: 5px; font-size: 12px; }
 }
 .msg { display: flex; gap: 10px; max-width: 82%; }
 .msg .avatar { width: 34px; height: 34px; border-radius: 50%; flex: 0 0 34px; display: flex; align-items: center; justify-content: center; font-size: 19px; background: var(--coral-soft); }
@@ -301,16 +306,24 @@ pre.json {
   font-size: 14px; z-index: 200; box-shadow: 0 8px 24px rgba(0,0,0,.25);
 }
 
-/* ---------------- 视频聊天（伪全双工） ---------------- */
+/* ---------------- 实时音视频 ---------------- */
 .call-bar {
   display: flex; align-items: center; gap: 14px; padding: 10px 16px;
   background: #2f2723; border-bottom: 1px solid var(--line);
 }
-.call-bar video { width: 150px; border-radius: 10px; display: block; background: #000; }
-.call-status { flex: 1; font-size: 13.5px; color: #f6ead9; }
+.call-bar video {
+  width: 132px; aspect-ratio: 4 / 3; flex: 0 0 132px; border-radius: 8px;
+  display: block; object-fit: cover; background: #000; transform: scaleX(-1);
+}
+.call-bar.has-video .fox { display: none; }
+.call-status { min-width: 0; flex: 1; font-size: 13.5px; color: #f6ead9; }
 .call-status .hint { display: block; font-size: 11.5px; color: #bfa893; margin-top: 3px; }
 .call-dot {
   display: inline-block; width: 8px; height: 8px; border-radius: 50%;
   background: #e5484d; margin-right: 7px; animation: pulse 1.2s infinite;
 }
 .call-bar .hangup { background: #e5484d; color: #fff; border: none; }
+@media (max-width: 520px) {
+  .call-bar video { width: 108px; flex-basis: 108px; }
+  .call-status .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

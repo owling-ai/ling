@@ -23,24 +23,27 @@ def start_session(child_id: int) -> dict:
     pack = memory.build_memory_pack(child_id)
     session_id = uuid.uuid4().hex[:12]
     child_name = pack["child_card"].get("name", "小朋友")
-    hook = pack.get("memory_hook") or ""
-    opening = f"{child_name}！你来啦！{hook}" if hook else f"{child_name}！你来啦！今天过得怎么样呀？"
+    doll_name = pack["doll_card"].get("name", "灵灵")
+    opening = f"嗨，{child_name}，{doll_name}在呢！"
 
+    # 实际开场由实时模型生成并通过 record_voice_doll 入库；这里不能预写一条
+    # 孩子尚未听到的记忆钩子，否则冷路径会处理出“幽灵转写”。
     sid = db.execute(
         "INSERT INTO sessions(child_id,started_at,transcript_json) VALUES(?,?,?)",
-        (child_id, db.now(), json.dumps([{"role": "assistant", "content": opening}], ensure_ascii=False)),
+        (child_id, db.now(), "[]"),
     )
     SESSIONS[session_id] = {
         "db_id": sid,
         "child_id": child_id,
         "pack": pack,
-        "history": [{"role": "assistant", "content": opening}],
+        "history": [],
         "woven": [],            # 玩偶已带出的目标词
         "produced": [],         # 孩子已亲口说出的目标词
         "shared": False,        # 待分享事件是否已经分享
         "pending_choice": False,  # 互动拍已抛出，等孩子的决定
         "retreated": False,     # 撤退规则已触发，今天不再复习
         "canon_written": [],
+        "idle_nudges": 0,       # 冷场主动发言预算；跨模型重连仍属于同一场
         "turn": 0,
     }
     db.execute("UPDATE session_agenda SET status='consumed' WHERE child_id=? AND date=?",
@@ -50,6 +53,15 @@ def start_session(child_id: int) -> dict:
 
 def get_session(session_id: str):
     return SESSIONS.get(session_id)
+
+
+def claim_idle_nudge(session_id: str, limit: int = 2) -> int | None:
+    """领取一次冷场主动发言预算，返回本场第几次；超限时返回 None。"""
+    session = SESSIONS.get(session_id)
+    if not session or session.get("idle_nudges", 0) >= limit:
+        return None
+    session["idle_nudges"] = session.get("idle_nudges", 0) + 1
+    return session["idle_nudges"]
 
 
 def _save_transcript(s):

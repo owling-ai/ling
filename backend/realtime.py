@@ -23,10 +23,20 @@ GEMINI_URL = os.environ.get(
     "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent",
 )
 GEMINI_MODEL = os.environ.get(
-    "LING_GEMINI_LIVE_MODEL", "gemini-2.5-flash-native-audio-latest"
+    "LING_GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview"
 )
 GEMINI_VOICE = os.environ.get("LING_GEMINI_VOICE", "Aoede")
 GEMINI_SILENCE_MS = int(os.environ.get("LING_GEMINI_SILENCE_MS", "600"))
+GEMINI_MAX_VIDEO_FRAME_CHARS = int(
+    os.environ.get("LING_GEMINI_MAX_VIDEO_FRAME_CHARS", "1200000")
+)
+GEMINI_TRANSCRIPTION_LANGUAGES = [
+    code.strip()
+    for code in os.environ.get(
+        "LING_GEMINI_TRANSCRIPTION_LANGUAGES", "zh-CN,en-US"
+    ).split(",")
+    if code.strip()
+]
 
 PROVIDER_INFO = {
     "stepfun": {
@@ -34,12 +44,14 @@ PROVIDER_INFO = {
         "voice": STEPFUN_VOICE,
         "input_sample_rate": 24000,
         "output_sample_rate": 24000,
+        "supports_video": False,
     },
     "gemini": {
         "model": GEMINI_MODEL,
         "voice": GEMINI_VOICE,
         "input_sample_rate": 16000,
         "output_sample_rate": 24000,
+        "supports_video": True,
     },
 }
 
@@ -59,6 +71,8 @@ VOICE_NOTE = """
 - 每次回复 1-2 句，短句、纯口语，像说话不像写字。
 - 禁止 emoji、括号动作、任何念不出来的符号。
 - 可以用「嘿嘿」「唔——」这类语气词，让自己听起来是活的。
+- 通话可能包含摄像头画面；只在孩子提到或画面确实有帮助时自然回应，不要持续描述画面。
+- 只使用简体中文和必要的英文课程词；不要说韩文、日文，也不要把中英混合短句误当成其他语言。
 
 # 再钉一遍（最重要）
 先听懂孩子这一句要什么，就答什么。孩子让你聊他的事、说他学的词、或说「别说你的」，
@@ -122,6 +136,52 @@ def _normalize_transcript(text: str) -> str:
     )
 
 
+def _gemini_transcription_config(pack: dict) -> dict:
+    phrases = ["蜂蜜", "蜂蜜味", "橡果", "橡果味", "honey", "taste", "strong"]
+    for item in pack.get("review_items") or []:
+        if isinstance(item, dict):
+            phrases.extend(item.get(key) for key in ("word", "zh") if item.get(key))
+    share_event = pack.get("share_event") or {}
+    phrases.extend(share_event.get("vocab") or [])
+    for card_key in ("child_card", "doll_card"):
+        name = (pack.get(card_key) or {}).get("name")
+        if name:
+            phrases.append(name)
+
+    deduplicated = []
+    seen = set()
+    for phrase in phrases:
+        phrase = str(phrase).strip()
+        key = phrase.casefold()
+        if phrase and key not in seen:
+            seen.add(key)
+            deduplicated.append(phrase)
+
+    return {
+        "languageHints": {"languageCodes": GEMINI_TRANSCRIPTION_LANGUAGES},
+        "adaptationPhrases": deduplicated[:50],
+    }
+
+
+def _gemini_video_message(event: dict) -> dict | None:
+    data = event.get("data")
+    mime_type = event.get("mime_type")
+    if (
+        mime_type != "image/jpeg"
+        or not isinstance(data, str)
+        or not 0 < len(data) <= GEMINI_MAX_VIDEO_FRAME_CHARS
+    ):
+        return None
+    return {
+        "realtimeInput": {
+            "video": {
+                "data": data,
+                "mimeType": mime_type,
+            }
+        }
+    }
+
+
 async def _connect(url: str, headers: dict[str, str]):
     import websockets
 
@@ -141,6 +201,33 @@ async def _send_json(client, obj: dict):
 
 def _system_instruction(pack: dict) -> str:
     return prompts.build_doll_system(pack) + VOICE_NOTE
+
+
+def _opening_instruction(pack: dict) -> str:
+    child_name = (pack.get("child_card") or {}).get("name", "小朋友")
+    doll_name = (pack.get("doll_card") or {}).get("name", "灵灵")
+    return (
+        f"通话刚接通。你是{doll_name}，请只用一句话向{child_name}简单打招呼，"
+        f"例如『嗨，{child_name}，我在呢！』。不要提昨天、记忆、学习、待办或故事，"
+        "不要问问题，不要要求孩子回答。"
+    )
+
+
+def _idle_instruction(pack: dict, nudge_number: int) -> str:
+    child_name = (pack.get("child_card") or {}).get("name", "小朋友")
+    if nudge_number == 1:
+        return (
+            f"这是后台冷场控制信号，不是{child_name}说的话。通话已经安静了一会儿。"
+            "请结合最近对话和当前画面，用一句很短、自然的话重新建立陪伴感；可以轻轻"
+            "评论眼前的事或问一个容易回答的小问题。禁止提昨天的记忆、学习议程、待办"
+            "和复习词，禁止连续提问。"
+        )
+    return (
+        f"这是本场最后一次后台冷场控制信号，不是{child_name}说的话。请优先结合当前"
+        "画面或刚才的话题，用一句短话自然找回互动。只有当前话题或画面与某个复习词"
+        "明显相关时，才可以像普通用词一样带出最多一个英文词；不得宣布学习、不得考试、"
+        "不得强行切换话题，也不要主动追问昨天的记忆。"
+    )
 
 
 def _stepfun_session_update(pack: dict) -> str:
@@ -168,7 +255,17 @@ async def _bridge_stepfun(client, session_id: str, pack: dict):
     headers = {"Authorization": f"Bearer {os.environ['STEPFUN_API_KEY']}"}
     upstream = await _connect(f"{STEPFUN_URL}?model={STEPFUN_MODEL}", headers)
     await upstream.send(_stepfun_session_update(pack))
-    await upstream.send(json.dumps({"type": "response.create"}))
+    # 不伪造用户消息；用单次 response instructions 覆盖开场，避免模型被记忆包
+    # 和复习议程吸引。StepFun 会继承 session 的音频配置。
+    await upstream.send(
+        json.dumps(
+            {
+                "type": "response.create",
+                "response": {"instructions": _opening_instruction(pack)},
+            },
+            ensure_ascii=False,
+        )
+    )
     _log(
         f"已接通 StepFun · {STEPFUN_MODEL} · voice={STEPFUN_VOICE} · "
         f"session={session_id}"
@@ -176,6 +273,8 @@ async def _bridge_stepfun(client, session_id: str, pack: dict):
 
     partial: dict[str, list[str]] = {}
     recorded: set[str] = set()
+    idle_item_ready = asyncio.Event()
+    waiting_for_idle_item = False
 
     async def push_state(state: dict | None):
         if state:
@@ -189,21 +288,55 @@ async def _bridge_stepfun(client, session_id: str, pack: dict):
         return engine.record_voice_doll(session_id, text)
 
     async def pump_up():
+        nonlocal waiting_for_idle_item
         while True:
             raw = await client.receive_text()
             try:
                 event = json.loads(raw)
             except ValueError:
                 continue
-            if event.get("type") not in STEPFUN_CLIENT_EVENTS:
+            event_type = event.get("type")
+            if event_type == "ling.idle_nudge":
+                nudge_number = engine.claim_idle_nudge(session_id)
+                if nudge_number:
+                    idle_item_ready.clear()
+                    waiting_for_idle_item = True
+                    await upstream.send(
+                        json.dumps(
+                            {
+                                "type": "conversation.item.create",
+                                "item": {
+                                    "type": "message",
+                                    "role": "user",
+                                    "content": [
+                                        {
+                                            "type": "input_text",
+                                            "text": _idle_instruction(pack, nudge_number),
+                                        }
+                                    ],
+                                },
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
+                    try:
+                        await asyncio.wait_for(idle_item_ready.wait(), timeout=2)
+                        await upstream.send(json.dumps({"type": "response.create"}))
+                    except asyncio.TimeoutError:
+                        _log("StepFun 冷场控制消息确认超时")
+                    finally:
+                        waiting_for_idle_item = False
                 continue
-            if event.get("type") == "conversation.item.create":
+            if event_type not in STEPFUN_CLIENT_EVENTS:
+                continue
+            if event_type == "conversation.item.create":
                 for part in (event.get("item") or {}).get("content") or []:
                     if part.get("type") in ("input_text", "text") and part.get("text"):
                         engine.record_voice_user(session_id, part["text"])
             await upstream.send(raw)
 
     async def pump_down():
+        nonlocal waiting_for_idle_item
         async for raw in upstream:
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8", errors="replace")
@@ -212,6 +345,9 @@ async def _bridge_stepfun(client, session_id: str, pack: dict):
             except ValueError:
                 continue
             event_type = event.get("type")
+            if event_type == "conversation.item.created" and waiting_for_idle_item:
+                idle_item_ready.set()
+                continue
             if event_type == "conversation.item.input_audio_transcription.completed":
                 engine.record_voice_user(session_id, event.get("transcript") or "")
             elif event_type == "response.audio_transcript.delta":
@@ -249,6 +385,7 @@ async def _bridge_stepfun(client, session_id: str, pack: dict):
 
 def _gemini_setup(pack: dict) -> dict:
     model = GEMINI_MODEL if GEMINI_MODEL.startswith("models/") else f"models/{GEMINI_MODEL}"
+    transcription = _gemini_transcription_config(pack)
     return {
         "setup": {
             "model": model,
@@ -268,8 +405,8 @@ def _gemini_setup(pack: dict) -> dict:
                     "silenceDurationMs": GEMINI_SILENCE_MS,
                 }
             },
-            "inputAudioTranscription": {},
-            "outputAudioTranscription": {},
+            "inputAudioTranscription": transcription,
+            "outputAudioTranscription": transcription,
         }
     }
 
@@ -293,7 +430,7 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
                             "role": "user",
                             "parts": [
                                 {
-                                    "text": "现在通话刚接通。请根据记忆钩子主动用一句简短、自然的话和孩子打招呼。"
+                                    "text": _opening_instruction(pack)
                                 }
                             ],
                         }
@@ -389,6 +526,35 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
                         }
                     )
                 )
+            elif event_type == "ling.video_frame":
+                message = _gemini_video_message(event)
+                if message:
+                    await upstream.send(json.dumps(message))
+            elif event_type == "ling.idle_nudge":
+                nudge_number = engine.claim_idle_nudge(session_id)
+                if nudge_number:
+                    await upstream.send(
+                        json.dumps(
+                            {
+                                "clientContent": {
+                                    "turns": [
+                                        {
+                                            "role": "user",
+                                            "parts": [
+                                                {
+                                                    "text": _idle_instruction(
+                                                        pack, nudge_number
+                                                    )
+                                                }
+                                            ],
+                                        }
+                                    ],
+                                    "turnComplete": True,
+                                }
+                            },
+                            ensure_ascii=False,
+                        )
+                    )
             elif event_type == "conversation.item.create":
                 texts = [
                     part.get("text", "")
@@ -440,7 +606,8 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
             output_transcription = content.get("outputTranscription") or {}
             has_output = bool(parts or output_transcription.get("text"))
             if has_output:
-                await flush_input()
+                # 输入 ASR 可能在模型开始输出后仍继续到达；等 turnComplete 再一次性提交，
+                # 避免把孩子的一句话拆成多个不完整气泡。
                 await ensure_response()
 
             for part in parts:

@@ -23,11 +23,11 @@ cp .env.example .env   # 然后按需填写
 
 ### 交互内核：Gemini Live / StepFun Realtime
 
-配置任意一个 API key 即可通话；两个都配置时，聊天页可以实时切换模型。默认优先使用 `gemini-2.5-flash-native-audio-latest`，也保留 StepFun `stepaudio-2.5-realtime`。
+配置任意一个 API key 即可通话；两个都配置时，聊天页可以实时切换模型。进入聊天页不会自动申请设备权限或连接模型，点击「接通」后才创建会话。默认使用支持音频与摄像头画面输入的预览模型 `gemini-3.1-flash-live-preview`；也保留 StepFun `stepaudio-2.5-realtime` 语音通道。模型一轮说完后连续安静约 20 秒，会触发一次轻量陪伴回应；下一次至少间隔 45 秒，每场最多两次。第一次禁止带记忆和学习，第二次也只有当前话题或画面自然相关时才可带一个词。
 
 ```bash
 export GEMINI_API_KEY=...
-export LING_GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-latest
+export LING_GEMINI_LIVE_MODEL=gemini-3.1-flash-live-preview
 export LING_GEMINI_VOICE=Aoede
 
 # 可选的第二提供商
@@ -39,7 +39,9 @@ export LING_REALTIME_PROVIDER=gemini
 export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-浏览器不直连模型服务：`/api/realtime/ws?provider=gemini|stepfun` 后端代理负责鉴权、协议转换、注入「人设 + 记忆包」，并截获双向转写喂给编织追踪器。Gemini 使用 16kHz 上行与 24kHz 下行 PCM；StepFun 上下行均为 24kHz PCM。API key 不会下发到前端。
+浏览器不直连模型服务：`/api/realtime/ws?provider=gemini|stepfun` 后端代理负责鉴权、协议转换、注入「人设 + 记忆包」，并截获双向转写喂给编织追踪器。Gemini 使用 16kHz 上行与 24kHz 下行 PCM；开启摄像头后，以 1 FPS 发送最长边 512px 的 JPEG 帧。StepFun 上下行均为 24kHz PCM，当前不发送视频。API key 不会下发到前端。
+
+Gemini Live 的页面文字来自同一会话返回的 `inputAudioTranscription` / `outputAudioTranscription`。原生音频模型直接生成音频 token，转写是对音频的附带识别结果，不是用于合成声音的原始文本，因此可能在用词、断句和标点上与实际听到的内容略有差异。默认通过 `languageHints` 将候选语言限制在简体中文与美式英语，并把当次课程词、角色名加入 `adaptationPhrases`，降低中英混说被误判成韩文等其他语言的概率。可用 `LING_GEMINI_TRANSCRIPTION_LANGUAGES` 覆盖语言列表。
 
 项目使用 `websockets>=12`；当前锁定版本 16 会自动读取 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`。对于 `wss://` 上游，通常设置 `HTTPS_PROXY=http://代理地址:端口`，代理需要支持 HTTP CONNECT。
 
@@ -65,7 +67,7 @@ export LING_WORKER_MODEL=deepseek/deepseek-chat
 
 ## 三幕演示脚本
 
-1. **开场无提示回忆**：打开「和灵灵聊天」，玩偶主动说「昨天你说要给那只三角龙起名字，起好了吗？」——实现它靠的不是高级检索，是夜间规划器预生成的记忆钩子。
+1. **纯问候后自然回忆**：接通时玩偶只简单说「嗨，我在呢」，不提昨天、不问问题；聊过两轮后，在自然相关或冷场时才可提起「昨天那只三角龙起好名字了吗？」。关系线索由夜间规划器预生成，不做现场检索。
 2. **复习藏在生活里 + 孩子写正典**：问「你今天做了什么呀？」，玩偶分享去动物园送请柬（zoo / panda / monkey / funny 自然出现在它的生活事件里），然后请孩子帮它决定生日蛋糕口味——孩子的决定写进世界正典，成为既定事实。
 3. **家长看到成长**：结束通话看冷路径产出（日记 / 新事实 / 掌握度回写），家长控制台里有成长曲线、「主动说出 N 个新词」（付费按钮）、被作废的旧事实（以前怕黑 → 现在不怕了）、玩偶视角的日记。
 
@@ -101,7 +103,7 @@ export LING_WORKER_MODEL=deepseek/deepseek-chat
 
 ### 教材复习闭环（英语学习不惹人烦的关键）
 
-玩偶的"自己的生活"就是复习内容的运载工具：夜间规划器从 SRS-lite 掌握度表挑 3-5 个到期项 → 生活时钟把目标词织进玩偶明天的生活事件 → 热路径开场注入议程（密度上限 3 / 机会主义触发 / **撤退规则**）→ 转写记账判定 曝光→识别→产出 三层并回写间隔。
+玩偶的"自己的生活"就是复习内容的运载工具：夜间规划器从 SRS-lite 掌握度表挑 3-5 个到期项 → 生活时钟把目标词织进玩偶明天的生活事件 → 热路径注入议程但禁止开场使用（密度上限 3 / 机会主义触发 / **撤退规则**）→ 转写记账判定 曝光→识别→产出 三层并回写间隔。
 
 ### 数字生命
 

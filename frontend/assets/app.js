@@ -135,8 +135,8 @@ VIEWS.home = async () => {
   </div>
   <div class="grid-2">
     <div class="card">
-      <h2>🌅 今日议程 <span class="hint">夜间规划器的产出 · 开场纯 DB 读</span></h2>
-      <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:8px">开场记忆钩子：</p>
+      <h2>🌅 今日议程 <span class="hint">夜间规划器的产出 · 热路径纯 DB 读</span></h2>
+      <p style="font-size:13.5px;color:var(--ink-2);margin-bottom:8px">关系记忆线索（纯问候后择机使用）：</p>
       <div style="background:var(--coral-soft);border-radius:12px;padding:10px 16px;font-weight:600;color:var(--coral-deep)">
         「${esc(hookText || "今天还没跑夜间规划器")}」
       </div>
@@ -161,6 +161,7 @@ VIEWS.chat = async () => {
   const doll = STATE.doll;
   const providers = STATE.realtime?.providers || {};
   const providerLabel = name => name === "gemini" ? "Gemini Live" : "StepFun";
+  const providerButtonLabel = name => name === "gemini" ? "Gemini" : "StepFun";
   let selectedProvider = localStorage.getItem("ling-realtime-provider") || STATE.realtime?.default_provider || "gemini";
   if (!providers[selectedProvider]?.available) {
     selectedProvider = Object.keys(providers).find(name => providers[name].available) || selectedProvider;
@@ -196,9 +197,11 @@ VIEWS.chat = async () => {
             ${["gemini", "stepfun"].map(name => `<button type="button" data-provider="${name}"
               ${providers[name]?.available ? "" : "disabled"}
               title="${providers[name]?.available ? esc(providers[name].model) : `${providerLabel(name)} 未配置 API key`}">
-              ${providerLabel(name)}</button>`).join("")}
+              ${providerButtonLabel(name)}</button>`).join("")}
           </div>
-          <button id="end-btn" title="挂电话 · 整理今天的记忆 · 看成长">📞 结束通话</button>
+          <button id="video-btn" class="video-toggle" type="button" aria-pressed="false" title="开启摄像头">📹</button>
+          <button id="call-btn" class="primary" title="连接所选实时模型">📞 接通</button>
+          <button id="end-btn" title="挂电话 · 整理今天的记忆 · 看成长" hidden>📞 结束通话</button>
         </div>
       </div>
       <div class="chat-log" id="log"></div>
@@ -235,18 +238,24 @@ VIEWS.chat = async () => {
   // 两个上游共用同一运行态；切换 provider 时保留记忆 session，只重建语音连接。
   const RT = { on: false, ws: null, ctx: null, stream: null, node: null, src: null,
                playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null,
-               userBubble: null };
+               userBubble: null, videoStream: null, videoEl: null, videoCanvas: null, videoTimer: null,
+               idleTimer: null, idleNudgesSent: 0, lastActivityAt: 0,
+               userSpeaking: false, lastVoiceAt: 0 };
   const rtInputRate = () => selectedConfig().input_sample_rate || 24000;
   const rtOutputRate = () => selectedConfig().output_sample_rate || 24000;
+  const IDLE_FIRST_MS = 20000, IDLE_NEXT_MS = 45000, IDLE_MAX_NUDGES = 2;
+  const LOCAL_SPEECH_RMS = 0.018;
   let manualEnd = false;   // true = 用户主动结束/切页；意外断线（false）才自动重连
 
-  // 开场：热路径记忆包（realtime bridge 要靠这个 session 注入人设+记忆），随后自动接通语音。
-  // 开场白不在前端预渲染——实时模型接通后会自己把「记忆钩子」当第一句话说出来（见 prompts 硬规则）。
-  const start = await api.post("/session/start");
-  CHAT = { sessionId: start.session_id, agenda: start.memory_pack.review_items || [], woven: [], produced: [] };
+  // 进入页面只准备 UI；点击“接通”且拿到麦克风权限后才创建记忆会话和连接上游。
+  CHAT = { sessionId: null, agenda: [], woven: [], produced: [] };
   renderAgenda();
 
   function renderAgenda() {
+    if (!CHAT.sessionId) {
+      $("#agenda-box").innerHTML = '<span class="chip ghost">接通后加载</span>';
+      return;
+    }
     $("#agenda-box").innerHTML = CHAT.agenda.filter(a => a.type === "word").map(a => {
       const st = CHAT.produced.includes(a.word) ? "produced" : (CHAT.woven.includes(a.word) ? "woven" : "");
       const stZh = st === "produced" ? "孩子说出来了!" : st === "woven" ? "已自然带出" : "待编织";
@@ -267,16 +276,25 @@ VIEWS.chat = async () => {
     if (res.retreated && !notified.retreated) { notified.retreated = true; toast("🛟 撤退规则触发：今天不再复习，纯陪伴模式"); }
   };
 
-  // 结束通话 → 挂断语音 + 跑冷路径记忆工人。冷路径要调 LLM 写日记/抽事实，可能慢，
-  // 给即时反馈 + try/catch，别让界面看起来「点了没反应」。
+  $("#call-btn").onclick = async () => {
+    const button = $("#call-btn");
+    manualEnd = false;
+    button.disabled = true; button.textContent = "正在接通…";
+    await startRealtime();
+    button.disabled = false; button.textContent = "📞 接通";
+    syncCallButtons();
+  };
+
+  // 结束通话 → 挂断语音 + 跑冷路径记忆工人。冷路径要调 LLM 写日记/抽事实，可能慢。
   $("#end-btn").onclick = () => {
     if (!CHAT.sessionId) return;
     manualEnd = true;
     endRealtime();
-    const btn = $("#end-btn");
-    btn.disabled = true; btn.textContent = "整理今天的记忆…（可切换页面）";
-    // sessionId 先摘出来置空，防重复点击；冷路径后台跑，不阻塞、切页也能收到卡片
-    const sid = CHAT.sessionId; CHAT.sessionId = null;
+    const sid = CHAT.sessionId;
+    CHAT.sessionId = null;
+    CHAT.agenda = []; CHAT.woven = []; CHAT.produced = [];
+    renderAgenda();
+    syncCallButtons();
     runColdPath(sid);
   };
 
@@ -307,6 +325,105 @@ VIEWS.chat = async () => {
   };
 
   const setRtStatus = (msg) => { const el = $("#rt-status"); if (el) el.textContent = msg; };
+
+  function clearIdleTimer() {
+    if (RT.idleTimer) clearTimeout(RT.idleTimer);
+    RT.idleTimer = null;
+  }
+
+  function scheduleIdleNudge() {
+    clearIdleTimer();
+    if (!RT.on || RT.idleNudgesSent >= IDLE_MAX_NUDGES) return;
+    const delay = RT.idleNudgesSent === 0 ? IDLE_FIRST_MS : IDLE_NEXT_MS;
+    const remaining = Math.max(500, delay - (Date.now() - RT.lastActivityAt));
+    RT.idleTimer = setTimeout(() => {
+      RT.idleTimer = null;
+      if (!RT.on || RT.active || RT.userSpeaking || !RT.ws || RT.ws.readyState !== 1) return;
+      RT.ws.send(JSON.stringify({ type: "ling.idle_nudge" }));
+      RT.idleNudgesSent += 1;
+      RT.lastActivityAt = Date.now();
+      setRtStatus("有点安静，灵灵在想怎么陪你…");
+    }, remaining);
+  }
+
+  function noteActivity(schedule = false) {
+    RT.lastActivityAt = Date.now();
+    clearIdleTimer();
+    if (schedule) scheduleIdleNudge();
+  }
+
+  function syncVideoButton() {
+    const button = $("#video-btn");
+    if (!button) return;
+    const supported = !!selectedConfig().supports_video;
+    const active = !!RT.videoStream;
+    button.disabled = !supported || !RT.on;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.title = supported
+      ? (active ? "关闭摄像头" : "开启摄像头，让 Gemini 看见画面")
+      : `${providerLabel(selectedProvider)} 不支持视频输入`;
+  }
+
+  function stopVideo() {
+    if (RT.videoTimer) clearInterval(RT.videoTimer);
+    RT.videoTimer = null;
+    RT.videoStream?.getTracks().forEach(track => track.stop());
+    RT.videoStream = null;
+    RT.videoEl?.remove();
+    RT.videoEl = null;
+    RT.videoCanvas = null;
+    $("#rt-bar")?.classList.remove("has-video");
+    syncVideoButton();
+  }
+
+  function sendVideoFrame() {
+    const video = RT.videoEl;
+    const ws = RT.ws;
+    if (!video || video.readyState < 2 || !ws || ws.readyState !== 1 ||
+        selectedProvider !== "gemini" || ws.bufferedAmount > 512000) return;
+    const scale = Math.min(1, 512 / Math.max(video.videoWidth, video.videoHeight));
+    const width = Math.max(1, Math.round(video.videoWidth * scale));
+    const height = Math.max(1, Math.round(video.videoHeight * scale));
+    const canvas = RT.videoCanvas || document.createElement("canvas");
+    RT.videoCanvas = canvas;
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width; canvas.height = height;
+    }
+    canvas.getContext("2d", { alpha: false }).drawImage(video, 0, 0, width, height);
+    const data = canvas.toDataURL("image/jpeg", 0.72).split(",")[1];
+    ws.send(JSON.stringify({ type: "ling.video_frame", mime_type: "image/jpeg", data }));
+  }
+
+  async function startVideo() {
+    if (!selectedConfig().supports_video) {
+      toast(`${providerLabel(selectedProvider)} 暂不支持视频输入`); return;
+    }
+    if (!RT.on) { toast("语音接通后才能开启摄像头"); return; }
+    if (RT.videoStream) return;
+    const providerAtStart = selectedProvider;
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
+      });
+    } catch { toast("没拿到摄像头权限"); return; }
+    if (!RT.on || selectedProvider !== providerAtStart) {
+      stream.getTracks().forEach(track => track.stop()); return;
+    }
+    const video = document.createElement("video");
+    video.className = "live-video";
+    video.srcObject = stream;
+    video.autoplay = true; video.muted = true; video.playsInline = true;
+    RT.videoStream = stream; RT.videoEl = video;
+    const bar = $("#rt-bar");
+    if (bar) { bar.prepend(video); bar.classList.add("has-video"); }
+    await video.play();
+    syncVideoButton();
+    sendVideoFrame();
+    RT.videoTimer = setInterval(sendVideoFrame, 1000);
+    setRtStatus("视频已开启，Gemini 正在看和听…");
+  }
 
   function rtStopPlayback() {
     RT.sources.forEach(s => { try { s.stop(); } catch { } });
@@ -339,6 +456,19 @@ VIEWS.chat = async () => {
     let all = new Float32Array(RT.bufLen), off = 0;
     RT.buf.forEach(b => { all.set(b, off); off += b.length; });
     RT.buf = []; RT.bufLen = 0;
+    const now = Date.now();
+    let energy = 0;
+    for (let i = 0; i < all.length; i++) energy += all[i] * all[i];
+    const rms = Math.sqrt(energy / Math.max(1, all.length));
+    if (rms >= LOCAL_SPEECH_RMS) {
+      RT.userSpeaking = true;
+      RT.lastVoiceAt = now;
+      noteActivity(false);
+    } else if (RT.userSpeaking && now - RT.lastVoiceAt >= 900) {
+      RT.userSpeaking = false;
+      noteActivity(true);
+    }
+
     all = resample(all, RT.ctx.sampleRate, rtInputRate());
     const i16 = new Int16Array(all.length);
     for (let i = 0; i < all.length; i++)
@@ -350,12 +480,17 @@ VIEWS.chat = async () => {
     switch (ev.type) {
       case "session.created":
       case "session.updated":   // 开场问候由后端注入人设后主动触发（realtime.py），前端不重复发
+        noteActivity(false);
         setRtStatus("已接通，直接说话吧"); break;
       case "input_audio_buffer.speech_started":   // 孩子开口 → 立刻停播 + 掐断在讲的回复
+        RT.userSpeaking = true;
+        noteActivity(false);
         rtStopPlayback();
         if (RT.active) { RT.ws?.send(JSON.stringify({ type: "response.cancel" })); RT.active = null; }
         setRtStatus("在听你说…"); break;
       case "input_audio_buffer.speech_stopped":
+        RT.userSpeaking = false;
+        noteActivity(true);
         setRtStatus("正在想…");
         // 先占位孩子的气泡：ASR 转写常晚于 AI 回复到达，占位保证顺序（孩子说 → AI 答）
         if (!RT.userBubble) RT.userBubble = addMsg("user", "");
@@ -367,9 +502,11 @@ VIEWS.chat = async () => {
           else RT.userBubble.closest(".msg")?.remove();   // 没识别到内容，撤掉占位
           RT.userBubble = null;
         } else if (t) { addMsg("user", t); }
+        noteActivity(true);
         log.scrollTop = log.scrollHeight; break;
       }
       case "response.created":
+        clearIdleTimer();
         RT.active = ev.id || ev.response?.id || true;
         RT.bubble = null; RT.text = ""; break;
       case "response.audio.delta":
@@ -384,6 +521,7 @@ VIEWS.chat = async () => {
         if (RT.bubble && ev.transcript) RT.bubble.innerHTML = rich(ev.transcript); break;
       case "response.done":
         RT.active = null;
+        noteActivity(true);
         setRtStatus("正在听…"); break;
       case "ling.state":   // 后端记账结果：编织进度/正典/撤退，与文字模式同一套
         finalize(ev); break;
@@ -395,19 +533,37 @@ VIEWS.chat = async () => {
   }
 
   async function startRealtime() {
-    if (RT.on) return;
+    if (RT.on) return true;
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
       });
-    } catch { toast("没拿到麦克风权限，语音通话需要它"); return; }
+    } catch { toast("没拿到麦克风权限，语音通话需要它"); return false; }
+
+    if (!CHAT.sessionId) {
+      try {
+        const start = await api.post("/session/start");
+        CHAT = { sessionId: start.session_id, agenda: start.memory_pack.review_items || [], woven: [], produced: [] };
+        RT.idleNudgesSent = 0;
+        renderAgenda();
+      } catch {
+        stream.getTracks().forEach(track => track.stop());
+        toast("会话创建失败，请重试");
+        return false;
+      }
+    }
+
     RT.stream = stream;
     try { RT.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rtInputRate() }); }
     catch { RT.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
     await RT.ctx.resume();
 
     RT.on = true;
+    RT.userSpeaking = false;
+    RT.lastVoiceAt = 0;
+    noteActivity(false);
+    syncCallButtons();
     const bar = document.createElement("div");
     bar.className = "call-bar"; bar.id = "rt-bar";
     bar.innerHTML = `${FOX(46)}
@@ -442,10 +598,13 @@ VIEWS.chat = async () => {
       if (!manualEnd && CHAT.sessionId) { toast("语音断了，正在重连…"); setTimeout(() => { if (!manualEnd && CHAT.sessionId) startRealtime(); }, 800); }
     };
     toast(`📞 正在接通 ${providerLabel(selectedProvider)}…`);
+    return true;
   }
 
   function endRealtime() {
-    if (!RT.on) return;
+    stopVideo();
+    clearIdleTimer();
+    if (!RT.on) { syncCallButtons(); return; }
     RT.on = false;
     rtStopPlayback();
     try { RT.node?.disconnect(); RT.src?.disconnect(); } catch { }
@@ -459,28 +618,45 @@ VIEWS.chat = async () => {
     RT.ctx = null;
     RT.buf = []; RT.bufLen = 0; RT.bubble = null; RT.text = ""; RT.active = null; RT.userBubble = null;
     $("#rt-bar")?.remove();
+    syncCallButtons();
+  }
+
+  function syncCallButtons() {
+    const call = $("#call-btn"), end = $("#end-btn");
+    if (call) call.hidden = RT.on;
+    if (end) end.hidden = !RT.on;
+    syncVideoButton();
   }
 
   function renderProviderSwitch() {
     document.querySelectorAll("[data-provider]").forEach(button =>
       button.classList.toggle("active", button.dataset.provider === selectedProvider));
+    syncVideoButton();
   }
+  $("#video-btn").onclick = () => RT.videoStream ? stopVideo() : startVideo();
   document.querySelectorAll("[data-provider]").forEach(button => button.onclick = async () => {
     const next = button.dataset.provider;
     if (next === selectedProvider || !providers[next]?.available) return;
+    const reconnect = RT.on;
     selectedProvider = next;
     localStorage.setItem("ling-realtime-provider", next);
-    renderProviderSwitch();
     endRealtime();
-    await startRealtime();
+    renderProviderSwitch();
+    if (reconnect) await startRealtime();
   });
   renderProviderSwitch();
+  syncCallButtons();
 
-  // 切到别的页面：主动挂断（标记 manualEnd，别触发自动重连）
-  window.addEventListener("hashchange", () => { manualEnd = true; endRealtime(); }, { once: true });
-
-  // 进入聊天页即接通默认或上次选择的实时模型。
-  startRealtime();
+  // 离开聊天页视为结束本次通话，并正常触发冷路径结算。
+  window.addEventListener("hashchange", () => {
+    manualEnd = true;
+    endRealtime();
+    const sid = CHAT?.sessionId;
+    if (sid) {
+      CHAT.sessionId = null;
+      runColdPath(sid);
+    }
+  }, { once: true });
 };
 
 // ---------------------------------------------------------------- 灵灵的世界（线上分身）
@@ -765,7 +941,7 @@ VIEWS.demo = async () => {
   </div>
   <div class="card">
     <h2>🎬 三幕演示脚本（评委看的就是这个）</h2>
-    <div class="script-step"><div class="n">1</div><div><b>开场无提示回忆</b> —— 打开「和灵灵聊天」，它主动说：「昨天你说要给那只三角龙起名字，起好了吗？」回答 <code>起好啦，叫大角！</code>，冷路径会把它记成新事实。</div></div>
+    <div class="script-step"><div class="n">1</div><div><b>纯问候后自然回忆</b> —— 接通时灵灵只简单打招呼；聊过两轮后，在自然相关或冷场时才可提起「昨天那只三角龙起好名字了吗？」。回答 <code>起好啦，叫大角！</code>，冷路径会把它记成新事实。</div></div>
     <div class="script-step"><div class="n">2</div><div><b>复习藏在生活里 + 孩子写正典</b> —— 问它 <code>你今天做了什么呀？</code>，它分享去动物园送请柬的事（zoo/panda/monkey/funny 自然出现），然后请孩子决定蛋糕口味：回答 <code>做橡果味的吧！</code>，决定写进世界正典，去「灵灵的世界」验证。</div></div>
     <div class="script-step"><div class="n">3</div><div><b>家长看到成长</b> —— 点「结束会话」看冷路径产出，再去「家长控制台」：成长曲线、主动说出 N 词、被作废的旧事实（以前怕黑 → 现在不怕了）、玩偶视角日记。</div></div>
     <div class="script-step"><div class="n">4</div><div><b>加分项</b> —— 说 <code>我不想说英语</code> 触发撤退规则（玩偶和点读机的分界线）；在「灵灵的世界」点生活时钟，看它「孩子不在时也在生活」。</div></div>
