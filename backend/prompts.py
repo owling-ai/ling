@@ -1,6 +1,6 @@
 """所有 prompt 模板。
 
-热路径只有一个 system prompt（拼记忆包，零 LLM 预处理），注入 StepFun 实时语音会话；
+热路径只有一个 system prompt（拼记忆包，零 LLM 预处理），注入实时语音会话；
 冷路径的抽取/反思/生活时钟各一个模板，要求 LLM 输出 JSON。
 """
 import json

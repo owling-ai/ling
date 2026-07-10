@@ -1,6 +1,6 @@
 """LLM 接入层：只服务冷路径记忆工人（日记/事实/反思/生活时钟/记忆钩子）。
 
-实时对话由 StepFun 实时语音大模型承担（见 realtime.py），不经过这里。
+实时对话由 Gemini Live 或 StepFun Realtime 承担（见 realtime.py），不经过这里。
 
 冷路径端点（异步任务，不在乎延迟）：
     LING_WORKER_BASE_URL / LING_WORKER_API_KEY / LING_WORKER_MODEL

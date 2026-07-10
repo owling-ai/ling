@@ -12,8 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from dotenv import load_dotenv
 
-from . import db, engine, life, llm, memory, realtime, seed, workers
+load_dotenv()
+
+from . import db, engine, life, llm, memory, realtime, seed, workers  # noqa: E402
 
 app = FastAPI(title="灵 · 共同成长玩偶记忆服务")
 
@@ -42,7 +45,11 @@ def startup():
         seed.seed()
     info = llm.mode_info()
     rt = realtime.info()
-    print(f"[realtime] 交互内核 StepFun 实时语音：{'✅ ' + rt['model'] + ' · ' + rt['voice'] if rt['available'] else '❌ 未配置 STEPFUN_API_KEY，无法通话'}\n"
+    live = ", ".join(
+        f"{name}={'on' if config['available'] else 'off'}"
+        for name, config in rt["providers"].items()
+    )
+    print(f"[realtime] 实时语音：{live} · default={rt['default_provider']}\n"
           f"[llm] 冷路径（记忆工人）：{info['worker_provider']} · {info['worker_model']}",
           flush=True)
 
@@ -149,12 +156,12 @@ def session_end(body: EndBody):
     return result
 
 
-# ---------------------------------------------------------------- 实时语音（StepFun 全双工）
+# ---------------------------------------------------------------- 实时语音（StepFun / Gemini Live）
 
 @app.websocket("/api/realtime/ws")
-async def realtime_ws(ws: WebSocket, session_id: str):
-    """浏览器 ↔ StepFun 实时语音代理。转写会喂回 engine 的编织追踪器。"""
-    await realtime.bridge(ws, session_id)
+async def realtime_ws(ws: WebSocket, session_id: str, provider: str | None = None):
+    """浏览器与选定实时模型之间的代理，转写会喂回记忆引擎。"""
+    await realtime.bridge(ws, session_id, provider)
 
 
 # ---------------------------------------------------------------- 记忆读取（家长控制台 / 线上分身共用）

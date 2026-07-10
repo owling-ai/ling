@@ -2,12 +2,13 @@
 
 > 儿童/家庭场景里的共同成长型实体 agent。孩子在长大，它也在长大。
 
-黑客松全套可运行 demo：**没有硬件也能完整演示** —— 网页就是玩偶，接通就直接说话、随时打断（StepFun 实时语音大模型，真全双工）。记忆系统（五层记忆、教材编织、数字生命）与语音链路解耦：**冷路径没有任何 API key 也照跑**，内置规则抽取器兜底。
+黑客松全套可运行 demo：**没有硬件也能完整演示** —— 网页就是玩偶，接通就直接说话、随时打断（Gemini Live / StepFun Realtime，可在前端切换）。记忆系统（五层记忆、教材编织、数字生命）与语音链路解耦：**冷路径没有任何 API key 也照跑**，内置规则抽取器兜底。
 
 ## 快速开始（uv 管理环境）
 
 ```bash
-export STEPFUN_API_KEY=...   # 交互内核，语音通话必需（也可写进 .env）
+export GEMINI_API_KEY=...    # Gemini Live
+export STEPFUN_API_KEY=...   # 可选；配置后可在前端切换到 StepFun
 ./run.sh                     # uv sync + 启动，首次启动自动预埋一周演示数据
 # 打开 http://localhost:8888
 ```
@@ -20,18 +21,27 @@ export STEPFUN_API_KEY=...   # 交互内核，语音通话必需（也可写进 
 cp .env.example .env   # 然后按需填写
 ```
 
-### 交互内核：StepFun 实时语音（必需）
+### 交互内核：Gemini Live / StepFun Realtime
 
-对话本体是 StepFun `stepaudio-2.5-realtime` 端到端语音大模型（WebSocket，pcm16 / 24kHz），直接说话、随时打断（server VAD barge-in）。
+配置任意一个 API key 即可通话；两个都配置时，聊天页可以实时切换模型。默认优先使用 `gemini-2.5-flash-native-audio-latest`，也保留 StepFun `stepaudio-2.5-realtime`。
 
 ```bash
+export GEMINI_API_KEY=...
+export LING_GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-latest
+export LING_GEMINI_VOICE=Aoede
+
+# 可选的第二提供商
 export STEPFUN_API_KEY=...
-# 可选：
-export LING_STEPFUN_VOICE=linjiajiejie   # 音色，也可填克隆音色 ID
-export LING_STEPFUN_SILENCE_MS=600       # 判定说完话的静音毫秒数
+export LING_STEPFUN_VOICE=linjiajiejie
+
+# 可选：指定默认提供商和 HTTP 代理
+export LING_REALTIME_PROVIDER=gemini
+export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
-架构上浏览器不直连 StepFun：`/api/realtime/ws` 后端代理负责鉴权（key 不下发前端）、把「人设 + 记忆包」注入 `session.update` 的 instructions，并截获双向转写喂给编织追踪器 —— 曝光/识别/产出记账、撤退规则、正典写回、会话后冷路径，全部照常。**记忆系统对语音链路完全无感**，这是热/冷路径分离换来的。
+浏览器不直连模型服务：`/api/realtime/ws?provider=gemini|stepfun` 后端代理负责鉴权、协议转换、注入「人设 + 记忆包」，并截获双向转写喂给编织追踪器。Gemini 使用 16kHz 上行与 24kHz 下行 PCM；StepFun 上下行均为 24kHz PCM。API key 不会下发到前端。
+
+项目使用 `websockets>=12`；当前锁定版本 16 会自动读取 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`。对于 `wss://` 上游，通常设置 `HTTPS_PROXY=http://代理地址:端口`，代理需要支持 HTTP CONNECT。
 
 ### 冷路径：记忆工人（可选，三级自动降级）
 
@@ -65,7 +75,7 @@ export LING_WORKER_MODEL=deepseek/deepseek-chat
 
 ```
 ┌─ 热路径（实时，禁止 LLM 记忆调用）────────────────────────┐
-│ 网页玩偶(麦克风/喇叭) ↔ /api/realtime/ws 代理 ↔ StepFun 语音 │
+│ 网页玩偶(麦克风/喇叭) ↔ /api/realtime/ws ↔ Gemini / StepFun │
 │   开场一次性预取「记忆包」（纯 DB 读，<50ms）注入 instructions │
 │   双向转写截获 → 编织追踪器记账（曝光/识别/产出、撤退、正典）   │
 └──────────────────────┬───────────────────────────────┘
@@ -105,7 +115,7 @@ backend/
   db.py        SQLite schema（全部表）
   memory.py    L1-L4 读写 + 热路径记忆包组装
   engine.py    会话状态 + 编织追踪器（转写记账 / 撤退规则 / 正典写回）
-  realtime.py  StepFun 实时语音代理（WS 鉴权 + 记忆注入 + 转写截获）
+  realtime.py  Gemini / StepFun 双实时代理（鉴权 + 协议转换 + 转写截获）
   llm.py       冷路径记忆工人 LLM 接入（OpenAI 兼容 / Anthropic，失败降级规则抽取器）
   prompts.py   全部 prompt 模板
   workers.py   冷路径：日记/事实/掌握度/反思

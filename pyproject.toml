@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn>=0.29",
     "anthropic>=0.40",
     "websockets>=12",
+    "python-dotenv>=1.2.2",
 ]
 
 [tool.uv]

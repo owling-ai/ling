@@ -1,5 +1,5 @@
 /* 灵 · 前端逻辑：hash 路由 + 六个视图。
-   交互内核 = StepFun 实时语音大模型（全双工语音）。前端只负责：展示对话转写 + 一个打字输入口。 */
+   交互内核可切换 StepFun Realtime / Gemini Live；前端负责音频采集、播放和转写展示。 */
 "use strict";
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -50,10 +50,13 @@ async function route() {
     a.classList.toggle("active", a.dataset.view === name));
   STATE = await api.get("/state");
   const badge = $("#llm-badge");
-  badge.textContent = STATE.realtime?.available
-    ? `📞 ${STATE.realtime.model}`
-    : "😴 未配置 STEPFUN_API_KEY";
-  badge.classList.toggle("live", !!STATE.realtime?.available);
+  const liveProviders = Object.entries(STATE.realtime?.providers || {})
+    .filter(([, config]) => config.available)
+    .map(([name]) => name === "gemini" ? "Gemini" : "StepFun");
+  badge.textContent = liveProviders.length
+    ? `📞 ${liveProviders.join(" + ")}`
+    : "😴 未配置实时模型";
+  badge.classList.toggle("live", liveProviders.length > 0);
   const view = VIEWS[name] || VIEWS.home;
   $("#view").innerHTML = '<div class="loading">加载中…</div>';
   await view();
@@ -156,24 +159,30 @@ VIEWS.home = async () => {
 
 VIEWS.chat = async () => {
   const doll = STATE.doll;
+  const providers = STATE.realtime?.providers || {};
+  const providerLabel = name => name === "gemini" ? "Gemini Live" : "StepFun";
+  let selectedProvider = localStorage.getItem("ling-realtime-provider") || STATE.realtime?.default_provider || "gemini";
+  if (!providers[selectedProvider]?.available) {
+    selectedProvider = Object.keys(providers).find(name => providers[name].available) || selectedProvider;
+  }
+  const selectedConfig = () => providers[selectedProvider] || {};
 
-  // 交互内核是 StepFun 实时语音；没配 key 就没有玩偶可聊，直说而不降级
   if (!STATE.realtime?.available) {
     $("#view").innerHTML = `
     <h1 class="page-title">和${esc(doll.name || "灵灵")}聊天</h1>
     <div class="card" style="text-align:center;padding:40px">
       ${FOX(90)}
       <h2 style="margin-top:14px">玩偶还没醒</h2>
-      <p style="color:var(--ink-2);max-width:420px;margin:8px auto 0">
-        灵靠 <b>StepFun 实时语音大模型</b>说话。请设置环境变量
-        <code>STEPFUN_API_KEY</code> 后刷新页面，就能直接和${esc(doll.name || "灵灵")}打语音电话了。</p>
+      <p style="color:var(--ink-2);max-width:440px;margin:8px auto 0">
+        请至少配置一个实时模型：<code>GEMINI_API_KEY</code> 或
+        <code>STEPFUN_API_KEY</code>，刷新页面后即可通话。</p>
     </div>`;
     return;
   }
 
   $("#view").innerHTML = `
   <h1 class="page-title">和${esc(doll.name || "灵灵")}打电话</h1>
-  <p class="page-sub">网页即玩偶 —— 接通后<b>直接说话</b>，它说话时你开口就能打断（StepFun 实时语音大模型，真全双工）。下面的转写只是让你看见你们说了什么。</p>
+  <p class="page-sub">网页即玩偶 —— 接通后直接说话，模型回复时开口即可打断。下方会同步显示双向转写。</p>
   <div class="chat-wrap">
     <div class="chat-panel">
       <div class="chat-head">
@@ -183,6 +192,12 @@ VIEWS.chat = async () => {
           <div>${esc(STAGE_ZH[doll.relationship_stage] || "新朋友")} · 心情：开心 · Lv.${doll.growth_level || 1}</div>
         </div>
         <div class="actions">
+          <div class="model-switch" role="group" aria-label="实时语音模型">
+            ${["gemini", "stepfun"].map(name => `<button type="button" data-provider="${name}"
+              ${providers[name]?.available ? "" : "disabled"}
+              title="${providers[name]?.available ? esc(providers[name].model) : `${providerLabel(name)} 未配置 API key`}">
+              ${providerLabel(name)}</button>`).join("")}
+          </div>
           <button id="end-btn" title="挂电话 · 整理今天的记忆 · 看成长">📞 结束通话</button>
         </div>
       </div>
@@ -217,11 +232,12 @@ VIEWS.chat = async () => {
     return $(".bubble", div);   // 转写增量要往里追加
   };
 
-  // 语音通话（StepFun realtime）运行态
+  // 两个上游共用同一运行态；切换 provider 时保留记忆 session，只重建语音连接。
   const RT = { on: false, ws: null, ctx: null, stream: null, node: null, src: null,
                playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null,
                userBubble: null };
-  const RT_RATE = STATE.realtime?.sample_rate || 24000;
+  const rtInputRate = () => selectedConfig().input_sample_rate || 24000;
+  const rtOutputRate = () => selectedConfig().output_sample_rate || 24000;
   let manualEnd = false;   // true = 用户主动结束/切页；意外断线（false）才自动重连
 
   // 开场：热路径记忆包（realtime bridge 要靠这个 session 注入人设+记忆），随后自动接通语音。
@@ -264,8 +280,8 @@ VIEWS.chat = async () => {
     runColdPath(sid);
   };
 
-  // ---- 语音通话（真·全双工）：StepFun 实时语音大模型，后端代理鉴权与记忆注入
-  // 上下行 pcm16 / 24kHz / 单声道 / base64；barge-in 靠 server_vad 的 speech_started
+  // ---- 全双工语音：后端负责鉴权、协议转换和记忆注入
+  // StepFun 上下行 24kHz；Gemini 上行 16kHz、下行 24kHz；均为 PCM16 单声道 base64。
   const b64FromInt16 = (i16) => {
     const u8 = new Uint8Array(i16.buffer, i16.byteOffset, i16.byteLength);
     let bin = "";
@@ -303,7 +319,7 @@ VIEWS.chat = async () => {
     if (!i16.length || !RT.ctx) return;
     const f32 = new Float32Array(i16.length);
     for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
-    const buf = RT.ctx.createBuffer(1, f32.length, RT_RATE);   // WebAudio 会自动重采样到 ctx 频率
+    const buf = RT.ctx.createBuffer(1, f32.length, rtOutputRate());   // WebAudio 自动重采样到播放设备频率
     buf.getChannelData(0).set(f32);
     const src = RT.ctx.createBufferSource();
     src.buffer = buf;
@@ -323,7 +339,7 @@ VIEWS.chat = async () => {
     let all = new Float32Array(RT.bufLen), off = 0;
     RT.buf.forEach(b => { all.set(b, off); off += b.length; });
     RT.buf = []; RT.bufLen = 0;
-    all = resample(all, RT.ctx.sampleRate, RT_RATE);
+    all = resample(all, RT.ctx.sampleRate, rtInputRate());
     const i16 = new Int16Array(all.length);
     for (let i = 0; i < all.length; i++)
       i16[i] = Math.max(-32768, Math.min(32767, Math.round(all[i] * 32767)));
@@ -387,7 +403,7 @@ VIEWS.chat = async () => {
       });
     } catch { toast("没拿到麦克风权限，语音通话需要它"); return; }
     RT.stream = stream;
-    try { RT.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: RT_RATE }); }
+    try { RT.ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: rtInputRate() }); }
     catch { RT.ctx = new (window.AudioContext || window.webkitAudioContext)(); }
     await RT.ctx.resume();
 
@@ -396,7 +412,7 @@ VIEWS.chat = async () => {
     bar.className = "call-bar"; bar.id = "rt-bar";
     bar.innerHTML = `${FOX(46)}
       <div class="call-status"><span class="call-dot"></span><b id="rt-status">正在接通…</b>
-        <span class="hint">StepFun 实时语音大模型 · 直接说话，它说话时你开口就能打断。戴耳机效果最好。</span></div>`;
+        <span class="hint">${providerLabel(selectedProvider)} · ${esc(selectedConfig().model || "")} · 直接说话，开口即可打断。戴耳机效果最好。</span></div>`;
     log.parentNode.insertBefore(bar, log);
 
     // 采集：AudioWorklet 优先，老浏览器退回 ScriptProcessor
@@ -415,17 +431,17 @@ VIEWS.chat = async () => {
     RT.node.connect(mute).connect(RT.ctx.destination);
 
     const proto = location.protocol === "https:" ? "wss://" : "ws://";
-    const ws = new WebSocket(`${proto}${location.host}/api/realtime/ws?session_id=${CHAT.sessionId}`);
+    const ws = new WebSocket(`${proto}${location.host}/api/realtime/ws?session_id=${CHAT.sessionId}&provider=${selectedProvider}`);
     RT.ws = ws;
     ws.onmessage = (e) => { let ev; try { ev = JSON.parse(e.data); } catch { return; } rtHandleEvent(ev); };
     ws.onerror = () => { console.warn("[realtime] ws error（交给 onclose 处理）"); };
     ws.onclose = () => {
-      if (!RT.on) return;
+      if (RT.ws !== ws || !RT.on) return;
       endRealtime();
-      // 意外断线（不是用户结束/切页）→ 自动重连，纯语音产品不该让孩子手动重拨
+      // 意外断线（不是用户结束/切页）才自动重连。
       if (!manualEnd && CHAT.sessionId) { toast("语音断了，正在重连…"); setTimeout(() => { if (!manualEnd && CHAT.sessionId) startRealtime(); }, 800); }
     };
-    toast("📞 正在接通 StepFun 实时语音…");
+    toast(`📞 正在接通 ${providerLabel(selectedProvider)}…`);
   }
 
   function endRealtime() {
@@ -445,10 +461,25 @@ VIEWS.chat = async () => {
     $("#rt-bar")?.remove();
   }
 
+  function renderProviderSwitch() {
+    document.querySelectorAll("[data-provider]").forEach(button =>
+      button.classList.toggle("active", button.dataset.provider === selectedProvider));
+  }
+  document.querySelectorAll("[data-provider]").forEach(button => button.onclick = async () => {
+    const next = button.dataset.provider;
+    if (next === selectedProvider || !providers[next]?.available) return;
+    selectedProvider = next;
+    localStorage.setItem("ling-realtime-provider", next);
+    renderProviderSwitch();
+    endRealtime();
+    await startRealtime();
+  });
+  renderProviderSwitch();
+
   // 切到别的页面：主动挂断（标记 manualEnd，别触发自动重连）
   window.addEventListener("hashchange", () => { manualEnd = true; endRealtime(); }, { once: true });
 
-  // 进入聊天页即接通语音——实时对话就是这个产品的交互内核，不是可选项
+  // 进入聊天页即接通默认或上次选择的实时模型。
   startRealtime();
 };
 
@@ -720,7 +751,7 @@ VIEWS.demo = async () => {
   $("#view").innerHTML = `
   <h1 class="page-title">演示控制台</h1>
   <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。
-    交互内核：${STATE.realtime?.available ? "📞 " + esc(STATE.realtime.model) : "😴 StepFun 未配置"}
+    交互内核：${STATE.realtime?.available ? "📞 StepFun / Gemini Live" : "😴 实时模型未配置"}
     · 记忆工人：${esc(STATE.llm.worker_model)}</p>
   <div class="card">
     <h2>🌙 冷路径任务</h2>
