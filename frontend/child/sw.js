@@ -1,15 +1,15 @@
 const CACHE_PREFIX = "ling-child-shell";
-const CACHE_NAME = `${CACHE_PREFIX}-v1`;
+const CACHE_NAME = `${CACHE_PREFIX}-v4`;
 const SHELL = [
-  "./",
-  "./index.html",
-  "./styles.css",
-  "./app.mjs",
-  "./api.mjs",
-  "./model.mjs",
-  "./manifest.webmanifest",
-  "./icon-192.png",
-  "./icon-512.png",
+  "/child/",
+  "/child/index.html",
+  "/child/styles.css",
+  "/child/app.mjs",
+  "/child/api.mjs",
+  "/child/model.mjs",
+  "/child/manifest.webmanifest",
+  "/child/icon-192.png",
+  "/child/icon-512.png",
 ];
 
 self.addEventListener("install", (event) => {
@@ -35,6 +35,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/demo-media/")) return;
   if (url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith("/child/")) return;
 
   event.respondWith(
     caches.match(request).then((cached) => cached || fetch(request).then((response) => {

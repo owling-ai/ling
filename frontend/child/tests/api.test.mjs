@@ -77,7 +77,7 @@ test("moment polling honors an already-cancelled signal", async () => {
   assert.equal(calls, 0);
 });
 
-test("moment polling announces a failed result after its attempt limit", async () => {
+test("moment polling times out without fabricating a server failure", async () => {
   const updates = [];
   const api = {
     moment: async () => ({ id: 9, kind: "personal", status: "rendering", poll_after_ms: 250 }),
@@ -89,6 +89,7 @@ test("moment polling announces a failed result after its attempt limit", async (
     onUpdate: (moment) => updates.push(moment.status),
   });
 
-  assert.equal(result.status, "failed");
-  assert.deepEqual(updates, ["rendering", "failed"]);
+  assert.equal(result.status, "timed_out");
+  assert.equal(result.retryable, true);
+  assert.deepEqual(updates, ["rendering"]);
 });

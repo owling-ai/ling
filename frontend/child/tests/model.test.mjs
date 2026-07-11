@@ -1,12 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as model from "../model.mjs";
 
 import {
   beginPocketChange,
+  childRoute,
   feedView,
   finishPocketChange,
+  isPocketMutationCurrent,
   momentView,
   reconcileFeed,
+  worldRefreshDelay,
   worldView,
 } from "../model.mjs";
 
@@ -106,6 +110,20 @@ test("a failed poll result removes its pending card without publishing it", () =
   assert.deepEqual(next.items.map((item) => item.id), ["public:1"]);
 });
 
+test("a client polling timeout keeps the pending card available for retry", () => {
+  const initial = feedView({
+    items: [{ id: "public:1", kind: "public", status: "published" }],
+    pending: [{ id: 9, kind: "personal", status: "rendering", title: "灵灵正在画" }],
+  });
+
+  const next = reconcileFeed(initial, { id: 9, kind: "personal", status: "timed_out" });
+
+  assert.deepEqual(next.pendingIds, ["9"]);
+  assert.equal(next.pending[0].status, "rendering");
+  assert.equal(next.pending[0].pollError, true);
+  assert.deepEqual(next.items.map((item) => item.id), ["public:1"]);
+});
+
 test("failed pocket mutation rolls optimistic collection back", () => {
   const keepsake = {
     id: "kite-token",
@@ -133,4 +151,62 @@ test("successful uncollect uses the server final state without deleting the keep
   assert.deepEqual(change.items, []);
   assert.deepEqual(finishPocketChange(change, { ok: true, collected: false }), []);
   assert.equal(change.keepsake.source_moment_id, 9);
+});
+
+test("malformed encoded moment routes fall back safely instead of throwing", () => {
+  assert.deepEqual(childRoute("#moment/9"), { name: "moment", id: "9" });
+  assert.deepEqual(childRoute("#moment/%E0%A4%A"), { name: "now" });
+  assert.deepEqual(childRoute("#something-else"), { name: "now" });
+});
+
+test("world refresh delay follows the server transition and avoids an immediate loop", () => {
+  const now = Date.parse("2026-07-11T17:59:58.000+08:00");
+
+  assert.equal(worldRefreshDelay("2026-07-11T18:00:00.000+08:00", now), 2000);
+  assert.equal(worldRefreshDelay("2026-07-11T17:00:00.000+08:00", now), 1000);
+  assert.equal(worldRefreshDelay("not-a-date", now), null);
+  assert.equal(worldRefreshDelay(null, now), null);
+});
+
+test("pocket mutation results apply only to the same route version and moment", () => {
+  const mutation = { token: "m1", momentId: "9", routeVersion: 4 };
+  const current = { token: "m1", momentId: "9", routeVersion: 4, routeName: "moment" };
+
+  assert.equal(isPocketMutationCurrent(mutation, current), true);
+  assert.equal(isPocketMutationCurrent(mutation, { ...current, routeVersion: 5 }), false);
+  assert.equal(isPocketMutationCurrent(mutation, { ...current, momentId: "10" }), false);
+  assert.equal(isPocketMutationCurrent(mutation, { ...current, routeName: "pocket" }), false);
+  assert.equal(isPocketMutationCurrent(mutation, { ...current, token: "m2" }), false);
+});
+
+test("child media URLs allow only demo media and exact child icons", () => {
+  const origin = "https://ling.test";
+  const { safeMediaUrl } = model;
+
+  assert.equal(typeof safeMediaUrl, "function");
+
+  assert.equal(safeMediaUrl("/demo-media/hill-wind-a.mp4", origin), "/demo-media/hill-wind-a.mp4");
+  assert.equal(
+    safeMediaUrl("https://ling.test/demo-media/hill-wind-a.png?v=2", origin),
+    "/demo-media/hill-wind-a.png?v=2",
+  );
+  assert.equal(safeMediaUrl("/child/icon-192.png", origin), "/child/icon-192.png");
+  assert.equal(safeMediaUrl("/child/icon-512.png", origin), "/child/icon-512.png");
+
+  for (const rejected of [
+    "/api/facts",
+    "/parent/icon-192.png",
+    "/child/app.mjs",
+    "/demo-mediaevil/video.mp4",
+    "https://elsewhere.test/demo-media/video.mp4",
+    "//elsewhere.test/demo-media/video.mp4",
+    "data:video/mp4;base64,AAAA",
+    "blob:https://ling.test/asset-id",
+    "https://user:pass@ling.test/demo-media/video.mp4",
+    "/demo-media/%2F..%2Fapi%2Ffacts",
+    "/demo-media/%E0%A4%A",
+    "http://%",
+  ]) {
+    assert.equal(safeMediaUrl(rejected, origin), "", `must reject ${rejected}`);
+  }
 });

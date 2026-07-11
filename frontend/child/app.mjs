@@ -1,10 +1,14 @@
 import { childApi, pollMomentUntilSettled } from "./api.mjs";
 import {
   beginPocketChange,
+  childRoute,
   feedView,
   finishPocketChange,
+  isPocketMutationCurrent,
   momentView,
   reconcileFeed,
+  safeMediaUrl,
+  worldRefreshDelay,
   worldView,
 } from "./model.mjs";
 
@@ -20,9 +24,11 @@ const state = {
   pocketItems: null,
   currentMoment: null,
   pocketBusy: false,
+  pocketMutation: null,
   routeController: null,
   pollControllers: new Map(),
   routeVersion: 0,
+  worldRefreshTimer: null,
 };
 
 function escapeHtml(value) {
@@ -35,17 +41,6 @@ function escapeHtml(value) {
   })[character]);
 }
 
-function safeAssetUrl(value) {
-  if (!value) return "";
-  try {
-    const url = new URL(value, window.location.origin);
-    if (url.origin !== window.location.origin) return "";
-    return escapeHtml(`${url.pathname}${url.search}${url.hash}`);
-  } catch {
-    return "";
-  }
-}
-
 function announce(message) {
   announcer.textContent = "";
   window.setTimeout(() => {
@@ -54,12 +49,7 @@ function announce(message) {
 }
 
 function routeInfo() {
-  const raw = (window.location.hash || "#now").slice(1);
-  if (raw.startsWith("moment/")) {
-    return { name: "moment", id: decodeURIComponent(raw.slice("moment/".length)) };
-  }
-  if (["now", "adventures", "pocket"].includes(raw)) return { name: raw };
-  return { name: "now" };
+  return childRoute(window.location.hash);
 }
 
 function updateNavigation(route) {
@@ -110,8 +100,8 @@ function applyWorld(world) {
 function mediaMarkup(media, { className = "media-frame", autoplay = false } = {}) {
   if (!media) return `<div class="media-fallback">这段画面暂时还没准备好。</div>`;
 
-  const src = safeAssetUrl(media.src);
-  const poster = safeAssetUrl(media.poster);
+  const src = escapeHtml(safeMediaUrl(media.src, window.location.origin));
+  const poster = escapeHtml(safeMediaUrl(media.poster, window.location.origin));
   const alt = escapeHtml(media.alt || "灵灵的奇遇画面");
   if (!src) return `<div class="media-fallback">这段画面暂时还没准备好。</div>`;
 
@@ -143,9 +133,11 @@ function renderNow(world) {
   commit(`
     <section aria-labelledby="now-title">
       <div class="world-scene">
-        ${scene}
-        ${model.isSleeping ? "" : `
-          <div class="scene-status"><span class="live-dot" aria-hidden="true"></span>此刻，AI 生成</div>`}
+        <div class="world-media">
+          ${scene}
+          ${model.isSleeping ? "" : `
+            <div class="scene-status"><span class="live-dot" aria-hidden="true"></span>此刻，灵灵在身边</div>`}
+        </div>
         <div class="scene-copy">
           <h1 id="now-title" tabindex="-1">${escapeHtml(model.headline)}</h1>
           <p>${escapeHtml(model.summary)}</p>
@@ -184,13 +176,23 @@ function formatDate(value) {
 
 function pendingCard(item) {
   return `
-    <article class="pending-card" aria-busy="true" data-pending-id="${escapeHtml(item.id)}">
+    <article class="pending-card" aria-busy="${String(!item.pollError)}" data-pending-id="${escapeHtml(item.id)}">
       <span class="kind-label personal">${escapeHtml(item.kindLabel)}</span>
       <h2>${escapeHtml(item.title)}</h2>
       <p>${item.pollError ? "刚才没连上，再试一次就好。" : "灵灵正在把这段共同经历画下来。"}</p>
-      <div class="pending-bar" aria-hidden="true"></div>
+      ${item.pollError ? "" : '<div class="pending-bar" aria-hidden="true"></div>'}
       ${item.pollError ? `<button class="secondary-button" type="button" data-action="retry-poll" data-id="${escapeHtml(item.id)}">继续生成</button>` : ""}
     </article>`;
+}
+
+function updatePendingCard(item) {
+  const card = [...view.querySelectorAll("[data-pending-id]")]
+    .find((candidate) => candidate.dataset.pendingId === String(item.id));
+  if (!card) return;
+
+  const template = document.createElement("template");
+  template.innerHTML = pendingCard(item).trim();
+  card.replaceWith(template.content.firstElementChild);
 }
 
 function momentCard(item) {
@@ -234,7 +236,7 @@ function appearance(value) {
 }
 
 function keepsakeVisual(item) {
-  const image = safeAssetUrl(item.image_url);
+  const image = escapeHtml(safeMediaUrl(item.image_url, window.location.origin));
   if (image) {
     return `<img src="${image}" alt="${escapeHtml(item.name || "信物")}" width="96" height="96" loading="lazy">`;
   }
@@ -274,13 +276,20 @@ function detailPending(moment, { focus = true } = {}) {
   commit(`
     <section class="detail-view" aria-labelledby="detail-pending-title">
       <a class="back-link" href="#adventures">返回奇遇</a>
-      <div class="pending-card" aria-busy="true">
+      <div class="pending-card" aria-busy="${String(!moment.pollError)}" data-detail-pending-id="${escapeHtml(moment.id)}">
         <span class="kind-label personal">专属瞬间，正在生成</span>
         <h1 id="detail-pending-title" tabindex="-1">${escapeHtml(moment.title || "灵灵正在画下这段回忆")}</h1>
-        <p>画面很快就会出现。</p>
-        <div class="pending-bar" aria-hidden="true"></div>
+        <p>${moment.pollError ? "生成状态暂时没连上，可以继续重试。" : "画面很快就会出现。"}</p>
+        ${moment.pollError ? `<button class="secondary-button" type="button" data-action="retry-detail-poll" data-id="${escapeHtml(moment.id)}">继续生成</button>` : '<div class="pending-bar" aria-hidden="true"></div>'}
       </div>
     </section>`, "瞬间生成中", { focus });
+}
+
+function updateDetailPending(moment) {
+  const card = view.querySelector("[data-detail-pending-id]");
+  if (!card || card.dataset.detailPendingId !== String(moment.id)) return;
+  const heading = card.querySelector("h1");
+  if (heading && moment.title) heading.textContent = moment.title;
 }
 
 function detailFailed({ focus = true } = {}) {
@@ -333,6 +342,23 @@ function stopPollers() {
   state.pollControllers.clear();
 }
 
+function clearWorldRefresh() {
+  if (state.worldRefreshTimer !== null) window.clearTimeout(state.worldRefreshTimer);
+  state.worldRefreshTimer = null;
+}
+
+function scheduleWorldRefresh(world, version) {
+  clearWorldRefresh();
+  const delay = worldRefreshDelay(world?.next_transition_at);
+  if (delay === null) return;
+
+  state.worldRefreshTimer = window.setTimeout(() => {
+    state.worldRefreshTimer = null;
+    if (state.routeVersion !== version || routeInfo().name !== "now") return;
+    route();
+  }, delay);
+}
+
 function startFeedPoll(item) {
   const key = `feed:${item.id}`;
   if (state.pollControllers.has(key)) return;
@@ -344,22 +370,27 @@ function startFeedPoll(item) {
     onUpdate: (moment) => {
       if (!state.feed) return;
       state.feed = reconcileFeed(state.feed, moment);
+      if (moment.status === "rendering") {
+        const pending = state.feed.pending.find((candidate) => candidate.id === String(moment.id));
+        if (pending && routeInfo().name === "adventures") updatePendingCard(pending);
+        return;
+      }
       if (routeInfo().name === "adventures") renderFeed(state.feed, { focus: false });
       if (moment.status === "published") announce("新的专属瞬间已经画好了。");
       if (moment.status === "failed") announce("这段画面没有生成好，已经从奇遇中移除。");
     },
   }).then((moment) => {
-    if (moment.status === "failed" && state.feed) {
+    if (moment.status === "timed_out" && state.feed) {
       state.feed = reconcileFeed(state.feed, moment);
-      if (routeInfo().name === "adventures") renderFeed(state.feed, { focus: false });
+      const pending = state.feed.pending.find((candidate) => candidate.id === String(moment.id));
+      if (pending && routeInfo().name === "adventures") updatePendingCard(pending);
+      announce("生成还在继续，可以稍后重试查看。");
     }
   }).catch((error) => {
     if (error.name === "AbortError" || !state.feed) return;
-    state.feed = {
-      ...state.feed,
-      pending: state.feed.pending.map((pending) => pending.id === item.id ? { ...pending, pollError: true } : pending),
-    };
-    if (routeInfo().name === "adventures") renderFeed(state.feed, { focus: false });
+    state.feed = reconcileFeed(state.feed, { id: item.id, status: "timed_out" });
+    const pending = state.feed.pending.find((candidate) => candidate.id === String(item.id));
+    if (pending && routeInfo().name === "adventures") updatePendingCard(pending);
     announce("生成状态暂时没连上，可以继续重试。");
   }).finally(() => {
     state.pollControllers.delete(key);
@@ -380,16 +411,27 @@ function startDetailPoll(moment) {
     signal: controller.signal,
     onUpdate: (next) => {
       if (routeInfo().name !== "moment" || routeInfo().id !== String(moment.id)) return;
-      renderDetail(next, { focus: next.status !== "rendering" });
+      if (next.status === "rendering") {
+        state.currentMoment = momentView(next);
+        updateDetailPending(state.currentMoment);
+        return;
+      }
+      renderDetail(next);
       if (next.status === "published") announce("专属瞬间已经画好了。");
     },
+  }).then((next) => {
+    if (next.status !== "timed_out" || routeInfo().name !== "moment" || routeInfo().id !== String(moment.id)) return;
+    state.currentMoment = momentView({ ...moment, status: "rendering", pollError: true });
+    detailPending(state.currentMoment, { focus: false });
+    announce("生成还在继续，可以稍后重试查看。");
   }).catch((error) => {
     if (error.name !== "AbortError") renderError("暂时看不到生成进度", "返回奇遇页后可以继续查看。");
   }).finally(() => state.pollControllers.delete(key));
 }
 
-async function loadWorld(signal) {
+async function loadWorld(signal, version) {
   const world = await childApi.world({ signal });
+  if (version !== state.routeVersion) return null;
   applyWorld(world);
   return world;
 }
@@ -398,7 +440,10 @@ async function route() {
   const current = routeInfo();
   const version = ++state.routeVersion;
   state.routeController?.abort();
+  clearWorldRefresh();
   stopPollers();
+  state.pocketMutation = null;
+  state.pocketBusy = false;
   state.routeController = new AbortController();
   const { signal } = state.routeController;
   updateNavigation(current);
@@ -406,29 +451,35 @@ async function route() {
 
   const backgroundWorld = current.name === "now"
     ? null
-    : loadWorld(signal).catch((error) => {
+    : loadWorld(signal, version).catch((error) => {
       if (error.name !== "AbortError") return null;
       throw error;
     });
 
   try {
     if (current.name === "now") {
-      renderNow(await loadWorld(signal));
+      const world = await loadWorld(signal, version);
+      if (!world || version !== state.routeVersion) return;
+      renderNow(world);
+      scheduleWorldRefresh(world, version);
     } else if (current.name === "adventures") {
       const feed = feedView(await childApi.feed({ signal }));
       if (version !== state.routeVersion) return;
       await backgroundWorld;
+      if (version !== state.routeVersion) return;
       renderFeed(feed);
       startFeedPolls(feed);
     } else if (current.name === "pocket") {
       const payload = await childApi.pocket({ signal });
       if (version !== state.routeVersion) return;
       await backgroundWorld;
+      if (version !== state.routeVersion) return;
       renderPocket(Array.isArray(payload.items) ? payload.items : []);
     } else {
       const moment = await childApi.moment(current.id, { signal });
       if (version !== state.routeVersion) return;
       await backgroundWorld;
+      if (version !== state.routeVersion) return;
       renderDetail(moment);
       if (moment.status === "rendering") startDetailPoll(moment);
     }
@@ -444,30 +495,58 @@ async function togglePocket() {
   if (!keepsake || state.pocketBusy) return;
 
   const desired = !Boolean(keepsake.collected);
+  const mutation = {
+    token: `${item.id}:${keepsake.id}:${state.routeVersion}`,
+    momentId: item.id,
+    routeVersion: state.routeVersion,
+  };
+  state.pocketMutation = mutation;
   const originalMoment = state.currentMoment;
   const baseItems = state.pocketItems || [];
   const change = beginPocketChange(baseItems, keepsake, desired);
-  state.pocketItems = change.items;
   state.currentMoment = momentView({ ...item, keepsake: { ...keepsake, collected: desired } });
   state.pocketBusy = true;
   renderDetail(state.currentMoment, { focus: false });
 
   try {
     const response = await childApi.setCollected(keepsake.id, desired);
+    const current = {
+      token: state.pocketMutation?.token,
+      momentId: state.currentMoment?.id,
+      routeVersion: state.routeVersion,
+      routeName: routeInfo().name,
+    };
+    if (!isPocketMutationCurrent(mutation, current)) return;
     const settled = { ok: true, ...response };
+    const finalCollected = Boolean(settled.collected ?? desired);
     state.pocketItems = finishPocketChange(change, settled);
     state.currentMoment = momentView({
       ...state.currentMoment,
-      keepsake: { ...state.currentMoment.keepsake, collected: Boolean(settled.collected ?? desired) },
+      keepsake: { ...state.currentMoment.keepsake, collected: finalCollected },
     });
-    announce(desired ? "已经收进口袋。" : "已经移出口袋。");
+    announce(finalCollected ? "已经收进口袋。" : "已经移出口袋。");
   } catch {
+    const current = {
+      token: state.pocketMutation?.token,
+      momentId: state.currentMoment?.id,
+      routeVersion: state.routeVersion,
+      routeName: routeInfo().name,
+    };
+    if (!isPocketMutationCurrent(mutation, current)) return;
     state.pocketItems = finishPocketChange(change, { ok: false });
     state.currentMoment = originalMoment;
     announce("刚才没有收好，已经恢复原来的状态。");
   } finally {
+    if (state.pocketMutation?.token !== mutation.token) return;
+    const shouldRender = isPocketMutationCurrent(mutation, {
+      token: state.pocketMutation.token,
+      momentId: state.currentMoment?.id,
+      routeVersion: state.routeVersion,
+      routeName: routeInfo().name,
+    });
     state.pocketBusy = false;
-    if (routeInfo().name === "moment") renderDetail(state.currentMoment, { focus: false });
+    state.pocketMutation = null;
+    if (shouldRender) renderDetail(state.currentMoment, { focus: false });
   }
 }
 
@@ -479,10 +558,19 @@ view.addEventListener("click", (event) => {
   if (action.dataset.action === "retry-poll") {
     const pending = state.feed?.pending.find((item) => item.id === action.dataset.id);
     if (pending) {
-      pending.pollError = false;
-      renderFeed(state.feed, { focus: false });
-      startFeedPoll(pending);
+      const retrying = { ...pending, pollError: false, pollState: "rendering" };
+      state.feed = {
+        ...state.feed,
+        pending: state.feed.pending.map((item) => item.id === retrying.id ? retrying : item),
+      };
+      updatePendingCard(retrying);
+      startFeedPoll(retrying);
     }
+  }
+  if (action.dataset.action === "retry-detail-poll" && state.currentMoment) {
+    state.currentMoment = momentView({ ...state.currentMoment, status: "rendering", pollError: false });
+    detailPending(state.currentMoment, { focus: false });
+    startDetailPoll(state.currentMoment);
   }
   if (action.dataset.action === "toggle-pocket") togglePocket();
 });
@@ -508,7 +596,10 @@ view.addEventListener("error", (event) => {
 }, true);
 
 window.addEventListener("hashchange", route);
-window.addEventListener("pagehide", stopPollers);
+window.addEventListener("pagehide", () => {
+  clearWorldRefresh();
+  stopPollers();
+});
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js", { scope: "/child/" }).catch(() => {});

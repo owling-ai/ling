@@ -4,6 +4,67 @@ const KIND_LABELS = {
 };
 
 const idOf = (value) => String(value ?? "");
+const MAX_TIMER_DELAY = 2_147_000_000;
+const CHILD_STATIC_MEDIA = new Set([
+  "/child/icon-192.png",
+  "/child/icon-512.png",
+]);
+
+export function safeMediaUrl(value, origin) {
+  if (typeof value !== "string" || !value || value.trim() !== value) return "";
+  if (/[\u0000-\u001F\u007F]/.test(value)) return "";
+
+  try {
+    const base = new URL(origin);
+    const url = new URL(value, base);
+    if (!["http:", "https:"].includes(base.protocol)) return "";
+    if (url.origin !== base.origin || url.username || url.password) return "";
+
+    const decodedPath = decodeURIComponent(url.pathname);
+    const segments = decodedPath.split("/");
+    if (/[\\\u0000-\u001F\u007F]/.test(decodedPath)) return "";
+    if (segments.includes(".") || segments.includes("..")) return "";
+
+    const demoMedia = decodedPath.startsWith("/demo-media/")
+      && decodedPath.length > "/demo-media/".length;
+    if (!demoMedia && !CHILD_STATIC_MEDIA.has(decodedPath)) return "";
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return "";
+  }
+}
+
+export function childRoute(hash = "#now") {
+  const raw = String(hash || "#now").replace(/^#/, "");
+  if (raw.startsWith("moment/")) {
+    try {
+      const id = decodeURIComponent(raw.slice("moment/".length));
+      return id ? { name: "moment", id } : { name: "now" };
+    } catch {
+      return { name: "now" };
+    }
+  }
+  if (["now", "adventures", "pocket"].includes(raw)) return { name: raw };
+  return { name: "now" };
+}
+
+export function worldRefreshDelay(nextTransitionAt, now = Date.now()) {
+  if (!nextTransitionAt) return null;
+  const transition = Date.parse(nextTransitionAt);
+  if (!Number.isFinite(transition)) return null;
+  return Math.min(MAX_TIMER_DELAY, Math.max(1000, transition - now));
+}
+
+export function isPocketMutationCurrent(mutation, current) {
+  return Boolean(
+    mutation
+    && current
+    && mutation.token === current.token
+    && String(mutation.momentId) === String(current.momentId)
+    && mutation.routeVersion === current.routeVersion
+    && current.routeName === "moment"
+  );
+}
 
 export function worldView(world = {}) {
   const mode = ["day", "night", "sleeping"].includes(world.mode) ? world.mode : "day";
@@ -65,6 +126,15 @@ export function feedView(payload = {}) {
 
 export function reconcileFeed(feed, result = {}) {
   const resultId = idOf(result.id);
+  if (result.status === "timed_out") {
+    return withPendingIds({
+      items: feed.items,
+      pending: feed.pending.map((item) => item.id === resultId
+        ? { ...item, status: "rendering", pollError: true, pollState: "timed_out" }
+        : item),
+    });
+  }
+
   const pending = feed.pending.filter((item) => item.id !== resultId);
   const existingItems = feed.items.filter((item) => item.id !== resultId);
 

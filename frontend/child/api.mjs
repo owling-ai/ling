@@ -74,9 +74,7 @@ export async function pollMomentUntilSettled(api, id, options = {}) {
     await wait(Math.max(250, Number(moment.poll_after_ms || 700)), signal);
   }
 
-  const failed = { id, kind: "personal", status: "failed", reason: "poll_timeout" };
-  onUpdate(failed);
-  return failed;
+  return { id, kind: "personal", status: "timed_out", reason: "poll_timeout", retryable: true };
 }
 
 export const childApi = createChildApi();

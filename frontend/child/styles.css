@@ -5,7 +5,7 @@
   --surface-soft: #E3EAF2;
   --ink: #34322D;
   --muted: #66645E;
-  --faint: #75726B;
+  --faint: #6A6861;
   --primary: #55779E;
   --primary-ink: #FFFFFF;
   --primary-deep: #3E5E82;
@@ -240,23 +240,30 @@ video {
 }
 
 .world-scene {
-  position: relative;
-  min-height: 390px;
+  height: auto;
   margin: 0 -16px;
+  overflow: visible;
+  background: var(--surface-soft);
+}
+
+.world-media {
+  position: relative;
+  width: 100%;
+  height: 390px;
   overflow: hidden;
   background: var(--surface-soft);
 }
 
-.world-scene .media-frame,
-.world-scene video,
-.world-scene img {
+.world-media .media-frame,
+.world-media video,
+.world-media img {
   width: 100%;
-  height: 390px;
+  height: 100%;
   border-radius: 0;
 }
 
-.world-scene video,
-.world-scene img {
+.world-media video,
+.world-media img {
   object-fit: cover;
 }
 
@@ -274,6 +281,7 @@ video {
   color: #F8F7F4;
   font-size: 0.75rem;
   font-weight: 700;
+  pointer-events: none;
 }
 
 .live-dot {
@@ -286,25 +294,22 @@ video {
 }
 
 .scene-copy {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  left: 0;
-  padding: 64px 18px 18px;
-  background: linear-gradient(to bottom, transparent, rgba(20, 22, 25, 0.8));
-  color: #F8F7F4;
+  position: static;
+  padding: 18px;
+  background: var(--surface);
+  color: var(--ink);
 }
 
 .scene-copy p {
   margin: 8px 0 0;
-  color: #F8F7F4;
+  color: var(--muted);
   font-size: 1rem;
 }
 
 .quiet-scene {
   display: grid;
   width: 100%;
-  height: 390px;
+  height: 100%;
   place-items: center;
   background: linear-gradient(180deg, #2B2D4C 0%, #171822 100%);
   color: #E9C685;
@@ -736,17 +741,20 @@ button:disabled {
     padding-left: 12px;
   }
 
-  .world-scene,
+  .world-scene {
+    margin-right: -12px;
+    margin-left: -12px;
+  }
+
   .skeleton-media {
     margin-right: -12px;
     margin-left: -12px;
   }
 
-  .world-scene,
-  .world-scene .media-frame,
-  .world-scene video,
-  .world-scene img,
-  .quiet-scene,
+  .world-media {
+    height: 330px;
+  }
+
   .skeleton-media {
     height: 330px;
     min-height: 330px;
