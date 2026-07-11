@@ -1,14 +1,20 @@
-"""StepFun Realtime 与 Gemini Live WebSocket 语音代理。
+"""StepFun、Gemini Live 与 MiniCPM-o WebSocket 实时音视频代理。
 
 浏览器只使用一套 OpenAI Realtime 风格的内部事件协议；本模块按 provider 把它转换成
-StepFun 或 Gemini Live 的上游协议。API key 始终只存在于后端。
+各家上游协议。API key 始终只存在于后端。
 """
 import asyncio
+import base64
+import binascii
+import inspect
 import json
+import math
 import os
 import re
 import sys
 import uuid
+from array import array
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from . import engine, prompts
 
@@ -38,6 +44,28 @@ GEMINI_TRANSCRIPTION_LANGUAGES = [
     if code.strip()
 ]
 
+MINICPM_BASE_URL = os.environ.get("LING_MINICPM_BASE_URL", "").strip()
+MINICPM_REALTIME_URL = os.environ.get("LING_MINICPM_REALTIME_URL", "").strip()
+MINICPM_API_KEY = os.environ.get("LING_MINICPM_API_KEY", "").strip()
+MINICPM_MODEL = os.environ.get("LING_MINICPM_MODEL", "MiniCPM-o-4.5")
+MINICPM_LENGTH_PENALTY = float(
+    os.environ.get("LING_MINICPM_LENGTH_PENALTY", "1.1")
+)
+MINICPM_INPUT_CHUNK_MS = max(
+    100, int(os.environ.get("LING_MINICPM_INPUT_CHUNK_MS", "1000"))
+)
+MINICPM_QUEUE_TIMEOUT_SECONDS = max(
+    5, int(os.environ.get("LING_MINICPM_QUEUE_TIMEOUT_SECONDS", "120"))
+)
+MINICPM_MAX_VIDEO_FRAME_CHARS = int(
+    os.environ.get("LING_MINICPM_MAX_VIDEO_FRAME_CHARS", "1200000")
+)
+MINICPM_USE_PROXY = os.environ.get("LING_MINICPM_USE_PROXY", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
 PROVIDER_INFO = {
     "stepfun": {
         "model": STEPFUN_MODEL,
@@ -64,6 +92,14 @@ PROVIDER_INFO = {
         "output_sample_rate": 48000,
         "supports_video": True,
         "transport": "bytedrtc",
+    },
+    "minicpm": {
+        "model": MINICPM_MODEL,
+        "voice": "default",
+        "input_sample_rate": 16000,
+        "output_sample_rate": 24000,
+        "supports_video": True,
+        "supports_idle_nudge": False,
     },
 }
 
@@ -106,6 +142,8 @@ def provider_available(provider: str) -> bool:
                 "VOLCENGINE_SECRET_KEY",
             )
         )
+    if provider == "minicpm":
+        return bool(MINICPM_REALTIME_URL or MINICPM_BASE_URL)
     return False
 
 
@@ -119,6 +157,8 @@ def default_provider() -> str:
         return "stepfun"
     if provider_available("volcengine"):
         return "volcengine"
+    if provider_available("minicpm"):
+        return "minicpm"
     return configured if configured in PROVIDER_INFO else "gemini"
 
 
@@ -206,17 +246,134 @@ def _gemini_video_message(event: dict) -> dict | None:
     }
 
 
-async def _connect(url: str, headers: dict[str, str]):
+def _minicpm_endpoint(video: bool) -> str:
+    """Build the realtime URL from either an explicit endpoint or an OpenAI base URL."""
+    raw = MINICPM_REALTIME_URL or MINICPM_BASE_URL
+    if not raw:
+        raise ValueError("MiniCPM realtime URL is not configured")
+
+    parts = urlsplit(raw)
+    scheme = {"http": "ws", "https": "wss", "ws": "ws", "wss": "wss"}.get(
+        parts.scheme.lower()
+    )
+    if not scheme or not parts.netloc:
+        raise ValueError("MiniCPM URL must be an absolute http(s) or ws(s) URL")
+
+    path = parts.path.rstrip("/")
+    if MINICPM_REALTIME_URL:
+        path = path or "/v1/realtime"
+    elif not path:
+        path = "/v1/realtime"
+    elif path.endswith("/realtime"):
+        pass
+    elif path.endswith("/v1"):
+        path += "/realtime"
+    else:
+        path += "/v1/realtime"
+
+    query = [(key, value) for key, value in parse_qsl(parts.query) if key != "mode"]
+    query.append(("mode", "video" if video else "audio"))
+    return urlunsplit((scheme, parts.netloc, path, urlencode(query), ""))
+
+
+def _minicpm_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {MINICPM_API_KEY}"} if MINICPM_API_KEY else {}
+
+
+def _decode_base64(value: str, sample_width: int) -> bytes:
+    if not isinstance(value, str) or not value:
+        raise ValueError("audio payload must be non-empty base64")
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("invalid base64 audio payload") from exc
+    if not raw or len(raw) % sample_width:
+        raise ValueError("audio payload has an invalid sample boundary")
+    return raw
+
+
+def _pcm16_bytes_to_float32_b64(raw: bytes) -> str:
+    if not raw or len(raw) % 2:
+        raise ValueError("PCM16 audio must contain complete samples")
+    samples = array("h")
+    samples.frombytes(raw)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    floats = array("f", (sample / 32768.0 for sample in samples))
+    if sys.byteorder != "little":
+        floats.byteswap()
+    return base64.b64encode(floats.tobytes()).decode("ascii")
+
+
+def _pcm16_b64_to_float32_b64(value: str) -> str:
+    return _pcm16_bytes_to_float32_b64(_decode_base64(value, 2))
+
+
+def _float32_b64_to_pcm16_b64(value: str) -> str:
+    raw = _decode_base64(value, 4)
+    floats = array("f")
+    floats.frombytes(raw)
+    if sys.byteorder != "little":
+        floats.byteswap()
+
+    def to_pcm16(sample: float) -> int:
+        if not math.isfinite(sample):
+            raise ValueError("float32 audio contains a non-finite sample")
+        sample = max(-1.0, min(1.0, sample))
+        return max(-32768, min(32767, round(sample * 32768.0)))
+
+    samples = array("h", (to_pcm16(sample) for sample in floats))
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return base64.b64encode(samples.tobytes()).decode("ascii")
+
+
+def _minicpm_video_frame(event: dict) -> str | None:
+    data = event.get("data")
+    if (
+        event.get("mime_type") != "image/jpeg"
+        or not isinstance(data, str)
+        or not 0 < len(data) <= MINICPM_MAX_VIDEO_FRAME_CHARS
+    ):
+        return None
+    try:
+        raw = base64.b64decode(data, validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    if len(raw) < 4 or not raw.startswith(b"\xff\xd8") or not raw.endswith(b"\xff\xd9"):
+        return None
+    return data
+
+
+def _minicpm_input_message(audio_pcm16: bytes, video: bool, frame: str | None) -> dict:
+    payload = {
+        "audio": _pcm16_bytes_to_float32_b64(audio_pcm16),
+        "force_listen": False,
+    }
+    if video:
+        if frame:
+            payload["video_frames"] = [frame]
+        payload["max_slice_nums"] = 1
+    return {"type": "input.append", "input": payload}
+
+
+async def _connect(
+    url: str, headers: dict[str, str], *, use_proxy: bool = True
+):
     import websockets
 
-    try:  # websockets >= 14
-        return await websockets.connect(
-            url, additional_headers=headers, max_size=None, open_timeout=15
-        )
-    except TypeError:  # websockets 12-13
-        return await websockets.connect(
-            url, extra_headers=headers, max_size=None, open_timeout=15
-        )
+    parameters = inspect.signature(websockets.connect).parameters
+    header_name = (
+        "additional_headers" if "additional_headers" in parameters else "extra_headers"
+    )
+    kwargs = {
+        header_name: headers,
+        "max_size": None,
+        "open_timeout": 15,
+    }
+    if not use_proxy and "proxy" in parameters:
+        kwargs["proxy"] = None
+    return await websockets.connect(url, **kwargs)
 
 
 async def _send_json(client, obj: dict):
@@ -664,7 +821,205 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
     await _run_pumps(client, upstream, pump_up, pump_down)
 
 
-async def _run_pumps(client, upstream, pump_up, pump_down):
+async def _receive_minicpm_event(upstream) -> dict:
+    raw = await asyncio.wait_for(
+        upstream.recv(), timeout=MINICPM_QUEUE_TIMEOUT_SECONDS
+    )
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    event = json.loads(raw)
+    if not isinstance(event, dict):
+        raise RuntimeError("MiniCPM returned a non-object event")
+    return event
+
+
+async def _initialize_minicpm(upstream, client, pack: dict, video: bool) -> None:
+    initialized = False
+    while True:
+        event = await _receive_minicpm_event(upstream)
+        event_type = event.get("type")
+        if event_type in {"session.queued", "session.queue_update"}:
+            await _send_json(
+                client,
+                {
+                    "type": "ling.queue",
+                    "position": event.get("position"),
+                    "estimated_wait_s": event.get("estimated_wait_s"),
+                },
+            )
+        elif event_type == "session.queue_done":
+            await upstream.send(
+                json.dumps(
+                    {
+                        "type": "session.init",
+                        "payload": {
+                            "system_prompt": _system_instruction(pack),
+                            "config": {"length_penalty": MINICPM_LENGTH_PENALTY},
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            initialized = True
+        elif event_type == "session.created" and initialized:
+            await _send_json(
+                client,
+                {"type": "session.created", "provider": "minicpm", "video": video},
+            )
+            return
+        elif event_type == "error":
+            error = event.get("error") or {}
+            raise RuntimeError(error.get("message") or "MiniCPM session initialization failed")
+
+
+async def _bridge_minicpm(client, session_id: str, pack: dict, video: bool):
+    upstream = await _connect(
+        _minicpm_endpoint(video),
+        _minicpm_headers(),
+        use_proxy=MINICPM_USE_PROXY,
+    )
+    await _initialize_minicpm(upstream, client, pack, video)
+    _log(
+        f"已接通 MiniCPM-o · {MINICPM_MODEL} · mode={'video' if video else 'audio'} · "
+        f"session={session_id}"
+    )
+
+    chunk_bytes = max(
+        2,
+        PROVIDER_INFO["minicpm"]["input_sample_rate"]
+        * 2
+        * MINICPM_INPUT_CHUNK_MS
+        // 1000,
+    )
+    audio_buffer = bytearray()
+    latest_frame: str | None = None
+    response_id = ""
+    upstream_response_id = ""
+    response_open = False
+    output_text: list[str] = []
+
+    async def finish_response():
+        nonlocal response_id, upstream_response_id, response_open, output_text
+        if not response_open:
+            return
+        text = _normalize_transcript("".join(output_text))
+        if text:
+            await _send_json(
+                client,
+                {
+                    "type": "response.audio_transcript.done",
+                    "response_id": response_id,
+                    "transcript": text,
+                },
+            )
+        state = engine.record_voice_doll(session_id, text) if text else None
+        await _send_json(
+            client, {"type": "response.done", "response": {"id": response_id}}
+        )
+        if state:
+            await _send_json(client, {"type": "ling.state", **state})
+        response_id = ""
+        upstream_response_id = ""
+        response_open = False
+        output_text = []
+
+    async def ensure_response(candidate_id: str | None):
+        nonlocal response_id, upstream_response_id, response_open, output_text
+        candidate_id = candidate_id or ""
+        if response_open and candidate_id and candidate_id != upstream_response_id:
+            await finish_response()
+        if response_open:
+            return
+        upstream_response_id = candidate_id
+        response_id = candidate_id or f"minicpm-{uuid.uuid4().hex}"
+        response_open = True
+        output_text = []
+        await _send_json(
+            client,
+            {"type": "response.created", "id": response_id, "response": {"id": response_id}},
+        )
+
+    async def pump_up():
+        nonlocal latest_frame
+        while True:
+            raw = await client.receive_text()
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                continue
+            event_type = event.get("type")
+            if event_type == "ling.video_frame" and video:
+                frame = _minicpm_video_frame(event)
+                if frame:
+                    latest_frame = frame
+                continue
+            if event_type != "input_audio_buffer.append" or not event.get("audio"):
+                continue
+            try:
+                audio_buffer.extend(_decode_base64(event["audio"], 2))
+            except ValueError:
+                continue
+            while len(audio_buffer) >= chunk_bytes:
+                chunk = bytes(audio_buffer[:chunk_bytes])
+                del audio_buffer[:chunk_bytes]
+                frame = latest_frame
+                latest_frame = None
+                await upstream.send(
+                    json.dumps(_minicpm_input_message(chunk, video, frame))
+                )
+
+    async def pump_down():
+        async for raw in upstream:
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            try:
+                event = json.loads(raw)
+            except ValueError:
+                continue
+            event_type = event.get("type")
+            if event_type == "response.output.delta":
+                kind = event.get("kind")
+                if kind == "listen":
+                    await finish_response()
+                elif kind == "text" and isinstance(event.get("text"), str):
+                    await ensure_response(event.get("response_id"))
+                    delta = event["text"]
+                    output_text.append(delta)
+                    await _send_json(
+                        client,
+                        {
+                            "type": "response.audio_transcript.delta",
+                            "response_id": response_id,
+                            "delta": delta,
+                        },
+                    )
+                elif kind == "audio" and event.get("audio"):
+                    try:
+                        audio = _float32_b64_to_pcm16_b64(event["audio"])
+                    except ValueError:
+                        continue
+                    await ensure_response(event.get("response_id"))
+                    await _send_json(
+                        client, {"type": "response.audio.delta", "delta": audio}
+                    )
+            elif event_type == "error":
+                error = event.get("error") or {}
+                _log(f"MiniCPM error：{error.get('code')} {error.get('message')}")
+                await _send_json(client, {"type": "error", **error})
+            elif event_type == "session.closed":
+                await finish_response()
+                return
+
+    await _run_pumps(
+        client,
+        upstream,
+        pump_up,
+        pump_down,
+        close_message={"type": "session.close", "reason": "user_stop"},
+    )
+
+
+async def _run_pumps(client, upstream, pump_up, pump_down, close_message=None):
     up = asyncio.create_task(pump_up())
     down = asyncio.create_task(pump_down())
     try:
@@ -677,6 +1032,11 @@ async def _run_pumps(client, upstream, pump_up, pump_down):
     finally:
         for task in (up, down):
             task.cancel()
+        if close_message:
+            try:
+                await upstream.send(json.dumps(close_message))
+            except Exception:
+                pass
         try:
             await upstream.close()
         except Exception:
@@ -687,7 +1047,9 @@ async def _run_pumps(client, upstream, pump_up, pump_down):
             pass
 
 
-async def bridge(client, session_id: str, provider: str | None = None):
+async def bridge(
+    client, session_id: str, provider: str | None = None, video: bool = False
+):
     """浏览器与指定实时模型之间的双向代理，并把转写写入记忆引擎。"""
     await client.accept()
     provider = (provider or default_provider()).lower()
@@ -700,6 +1062,7 @@ async def bridge(client, session_id: str, provider: str | None = None):
             "gemini": "GEMINI_API_KEY",
             "stepfun": "STEPFUN_API_KEY",
             "volcengine": "VOLCENGINE_RTC_APP_ID / APP_KEY / ACCESS_KEY / SECRET_KEY",
+            "minicpm": "LING_MINICPM_BASE_URL 或 LING_MINICPM_REALTIME_URL",
         }[provider]
         await _send_json(
             client,
@@ -718,6 +1081,8 @@ async def bridge(client, session_id: str, provider: str | None = None):
             raise RuntimeError("Volcengine uses the ByteRTC REST control plane")
         if provider == "gemini":
             await _bridge_gemini(client, session_id, session["pack"])
+        elif provider == "minicpm":
+            await _bridge_minicpm(client, session_id, session["pack"], video)
         else:
             await _bridge_stepfun(client, session_id, session["pack"])
     except Exception as exc:

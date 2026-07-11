@@ -1,5 +1,5 @@
 /* 灵 · 前端逻辑：hash 路由 + 六个视图。
-   交互内核可切换 Gemini Live / StepFun / Volcengine RTC。 */
+   交互内核可切换 Gemini Live / StepFun / MiniCPM-o / Volcengine RTC。 */
 "use strict";
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -56,7 +56,7 @@ async function route() {
   const badge = $("#llm-badge");
   const liveProviders = Object.entries(STATE.realtime?.providers || {})
     .filter(([, config]) => config.available)
-    .map(([name]) => ({ gemini: "Gemini", stepfun: "StepFun", volcengine: "火山 RTC" })[name] || name);
+    .map(([name]) => ({ gemini: "Gemini", stepfun: "StepFun", minicpm: "MiniCPM", volcengine: "火山 RTC" })[name] || name);
   badge.textContent = liveProviders.length
     ? `📞 ${liveProviders.join(" + ")}`
     : "😴 未配置实时模型";
@@ -165,16 +165,17 @@ VIEWS.chat = async () => {
   const doll = STATE.doll;
   const providers = STATE.realtime?.providers || {};
   const providerLabel = name => ({
-    gemini: "Gemini Live", stepfun: "StepFun", volcengine: "火山引擎 RTC",
+    gemini: "Gemini Live", stepfun: "StepFun", minicpm: "MiniCPM-o 4.5", volcengine: "火山引擎 RTC",
   })[name] || name;
   const providerButtonLabel = name => ({
-    gemini: "Gemini", stepfun: "StepFun", volcengine: "火山 RTC",
+    gemini: "Gemini", stepfun: "StepFun", minicpm: "MiniCPM", volcengine: "火山 RTC",
   })[name] || name;
   let selectedProvider = localStorage.getItem("ling-realtime-provider") || STATE.realtime?.default_provider || "gemini";
   if (!providers[selectedProvider]?.available) {
     selectedProvider = Object.keys(providers).find(name => providers[name].available) || selectedProvider;
   }
   const selectedConfig = () => providers[selectedProvider] || {};
+  let videoRequested = false;
 
   if (!STATE.realtime?.available) {
     $("#view").innerHTML = `
@@ -183,14 +184,14 @@ VIEWS.chat = async () => {
       ${FOX(90)}
       <h2 style="margin-top:14px">玩偶还没醒</h2>
       <p style="color:var(--ink-2);max-width:440px;margin:8px auto 0">
-        请配置 Gemini、StepFun，或火山引擎 RTC 的后端凭证，刷新页面后即可通话。</p>
+        请配置 Gemini、StepFun、MiniCPM-o，或火山引擎 RTC，刷新页面后即可通话。</p>
     </div>`;
     return;
   }
 
   $("#view").innerHTML = `
   <h1 class="page-title">和${esc(doll.name || "灵灵")}打电话</h1>
-  <p class="page-sub">网页即玩偶 —— 接通后直接说话，模型回复时开口即可打断。下方会同步显示双向转写。</p>
+  <p class="page-sub">网页即玩偶 —— 接通后直接说话，模型回复时开口即可打断。支持转写的模型会在下方同步显示字幕。</p>
   <div class="chat-wrap">
     <div class="chat-panel">
       <div class="chat-head">
@@ -201,9 +202,9 @@ VIEWS.chat = async () => {
         </div>
         <div class="actions">
           <div class="model-switch" role="group" aria-label="实时语音模型">
-            ${["gemini", "stepfun", "volcengine"].map(name => `<button type="button" data-provider="${name}"
+            ${["gemini", "stepfun", "minicpm", "volcengine"].map(name => `<button type="button" data-provider="${name}"
               ${providers[name]?.available ? "" : "disabled"}
-              title="${providers[name]?.available ? esc(providers[name].model) : `${providerLabel(name)} 未配置后端凭证`}">
+              title="${providers[name]?.available ? esc(providers[name].model) : `${providerLabel(name)} 未配置后端连接`}">
               ${providerButtonLabel(name)}</button>`).join("")}
           </div>
           <button id="video-btn" class="video-toggle" type="button" aria-pressed="false" title="开启摄像头">📹</button>
@@ -242,11 +243,11 @@ VIEWS.chat = async () => {
     return $(".bubble", div);   // 转写增量要往里追加
   };
 
-  // 三个上游共用记忆 session；火山使用 ByteRTC，其余使用内部 WebSocket 协议。
+  // 四个上游共用记忆 session；火山使用 ByteRTC，其余使用内部 WebSocket 协议。
   const RT = { on: false, provider: null, ws: null, ctx: null, stream: null, node: null, src: null,
                playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null,
                userBubble: null, videoStream: null, videoActive: false, videoEl: null,
-               videoCanvas: null, videoTimer: null, rtcEngine: null, rtcInfo: null,
+               videoCanvas: null, videoTimer: null, videoSwitching: false, rtcEngine: null, rtcInfo: null,
                volcSubtitleBubbles: new Map(), idleTimer: null, idleNudgesSent: 0,
                lastActivityAt: 0, userSpeaking: false, lastVoiceAt: 0 };
   const rtInputRate = () => selectedConfig().input_sample_rate || 24000;
@@ -287,9 +288,9 @@ VIEWS.chat = async () => {
   $("#call-btn").onclick = async () => {
     const button = $("#call-btn");
     manualEnd = false;
-    button.disabled = true; button.textContent = "正在接通…";
+    button.disabled = true; button.textContent = videoRequested ? "正在接通视频…" : "正在接通语音…";
     await startRealtime();
-    button.disabled = false; button.textContent = "📞 接通";
+    button.disabled = false;
     syncCallButtons();
   };
 
@@ -307,7 +308,7 @@ VIEWS.chat = async () => {
   };
 
   // ---- 全双工语音：后端负责鉴权、协议转换和记忆注入
-  // StepFun 上下行 24kHz；Gemini 上行 16kHz、下行 24kHz；均为 PCM16 单声道 base64。
+  // 浏览器统一收发 PCM16；后端负责 MiniCPM 所需 float32 PCM 与约 1 秒分片转换。
   const b64FromInt16 = (i16) => {
     const u8 = new Uint8Array(i16.buffer, i16.byteOffset, i16.byteLength);
     let bin = "";
@@ -341,7 +342,8 @@ VIEWS.chat = async () => {
 
   function scheduleIdleNudge() {
     clearIdleTimer();
-    if (!RT.on || RT.idleNudgesSent >= IDLE_MAX_NUDGES) return;
+    if (!RT.on || selectedConfig().supports_idle_nudge === false ||
+        RT.idleNudgesSent >= IDLE_MAX_NUDGES) return;
     const delay = RT.idleNudgesSent === 0 ? IDLE_FIRST_MS : IDLE_NEXT_MS;
     const remaining = Math.max(500, delay - (Date.now() - RT.lastActivityAt));
     RT.idleTimer = setTimeout(async () => {
@@ -377,13 +379,17 @@ VIEWS.chat = async () => {
     const button = $("#video-btn");
     if (!button) return;
     const supported = !!selectedConfig().supports_video;
-    const active = RT.videoActive;
-    button.disabled = !supported || !RT.on;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", active ? "true" : "false");
-    button.title = supported
-      ? (active ? "关闭摄像头" : `开启摄像头，让${providerLabel(selectedProvider)}看见画面`)
-      : `${providerLabel(selectedProvider)} 不支持视频输入`;
+    const requested = supported && videoRequested;
+    button.disabled = !supported || RT.videoSwitching;
+    button.classList.toggle("active", requested);
+    button.setAttribute("aria-pressed", requested ? "true" : "false");
+    if (!supported) {
+      button.title = `${providerLabel(selectedProvider)} 不支持视频输入`;
+    } else if (!RT.on) {
+      button.title = requested ? "已选择视频通话，点击改为语音通话" : "选择视频通话";
+    } else {
+      button.title = requested ? "切换为语音通话" : "切换为视频通话";
+    }
   }
 
   function stopVideo() {
@@ -407,7 +413,7 @@ VIEWS.chat = async () => {
     const video = RT.videoEl;
     const ws = RT.ws;
     if (!video || video.readyState < 2 || !ws || ws.readyState !== 1 ||
-        selectedProvider !== "gemini" || ws.bufferedAmount > 512000) return;
+        !["gemini", "minicpm"].includes(RT.provider) || ws.bufferedAmount > 512000) return;
     const scale = Math.min(1, 512 / Math.max(video.videoWidth, video.videoHeight));
     const width = Math.max(1, Math.round(video.videoWidth * scale));
     const height = Math.max(1, Math.round(video.videoHeight * scale));
@@ -423,10 +429,10 @@ VIEWS.chat = async () => {
 
   async function startVideo() {
     if (!selectedConfig().supports_video) {
-      toast(`${providerLabel(selectedProvider)} 暂不支持视频输入`); return;
+      toast(`${providerLabel(selectedProvider)} 暂不支持视频输入`); return false;
     }
-    if (!RT.on) { toast("语音接通后才能开启摄像头"); return; }
-    if (RT.videoActive) return;
+    if (!RT.on) return false;
+    if (RT.videoActive) return true;
     if (RT.rtcEngine) {
       const mount = document.createElement("div");
       mount.className = "rtc-local-video";
@@ -441,12 +447,13 @@ VIEWS.chat = async () => {
         RT.videoActive = true;
         syncVideoButton();
         setRtStatus("视频已开启，火山引擎正在看和听…");
+        return true;
       } catch (error) {
         mount.remove();
         toast("没拿到摄像头权限");
         console.warn("[volcengine] 开启视频失败", error);
+        return false;
       }
-      return;
     }
     const providerAtStart = selectedProvider;
     let stream;
@@ -454,9 +461,9 @@ VIEWS.chat = async () => {
       stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: "user" },
       });
-    } catch { toast("没拿到摄像头权限"); return; }
+    } catch { toast("没拿到摄像头权限"); return false; }
     if (!RT.on || selectedProvider !== providerAtStart) {
-      stream.getTracks().forEach(track => track.stop()); return;
+      stream.getTracks().forEach(track => track.stop()); return false;
     }
     const video = document.createElement("video");
     video.className = "live-video";
@@ -465,11 +472,77 @@ VIEWS.chat = async () => {
     RT.videoStream = stream; RT.videoEl = video; RT.videoActive = true;
     const bar = $("#rt-bar");
     if (bar) { bar.prepend(video); bar.classList.add("has-video"); }
-    await video.play();
+    try {
+      await video.play();
+    } catch (error) {
+      stopVideo();
+      toast("摄像头画面启动失败");
+      console.warn("[realtime] 视频预览启动失败", error);
+      return false;
+    }
     syncVideoButton();
     sendVideoFrame();
     RT.videoTimer = setInterval(sendVideoFrame, 1000);
-    setRtStatus("视频已开启，Gemini 正在看和听…");
+    setRtStatus(`视频已开启，${providerLabel(selectedProvider)} 正在看和听…`);
+    return true;
+  }
+
+  function openRealtimeSocket(videoMode = videoRequested) {
+    const proto = location.protocol === "https:" ? "wss://" : "ws://";
+    const query = new URLSearchParams({
+      session_id: CHAT.sessionId,
+      provider: selectedProvider,
+    });
+    if (selectedProvider === "minicpm") query.set("video", videoMode ? "1" : "0");
+    const ws = new WebSocket(`${proto}${location.host}/api/realtime/ws?${query}`);
+    RT.ws = ws;
+    ws.onmessage = (e) => { let ev; try { ev = JSON.parse(e.data); } catch { return; } rtHandleEvent(ev); };
+    ws.onerror = () => { console.warn("[realtime] ws error（交给 onclose 处理）"); };
+    ws.onclose = () => {
+      if (RT.ws !== ws || !RT.on) return;
+      endRealtime();
+      // 意外断线（不是用户结束/切页）才自动重连。
+      if (!manualEnd && CHAT.sessionId) {
+        toast("通话断了，正在重连…");
+        setTimeout(() => { if (!manualEnd && CHAT.sessionId) startRealtime(); }, 800);
+      }
+    };
+    return ws;
+  }
+
+  function restartMinicpmTransport() {
+    const previous = RT.ws;
+    rtStopPlayback();
+    RT.active = null;
+    openRealtimeSocket(videoRequested);
+    try { previous?.close(); } catch { }
+    setRtStatus(videoRequested ? "正在切换到视频通话…" : "正在切换到语音通话…");
+  }
+
+  async function toggleVideoMode() {
+    if (!selectedConfig().supports_video || RT.videoSwitching) return;
+    const next = !videoRequested;
+    videoRequested = next;
+    syncCallButtons();
+    if (!RT.on) return;
+
+    RT.videoSwitching = true;
+    syncVideoButton();
+    try {
+      if (next) {
+        const started = await startVideo();
+        if (!started) {
+          videoRequested = false;
+          return;
+        }
+      } else {
+        stopVideo();
+      }
+      if (selectedProvider === "minicpm") restartMinicpmTransport();
+    } finally {
+      RT.videoSwitching = false;
+      syncCallButtons();
+    }
   }
 
   function rtStopPlayback() {
@@ -508,9 +581,15 @@ VIEWS.chat = async () => {
     for (let i = 0; i < all.length; i++) energy += all[i] * all[i];
     const rms = Math.sqrt(energy / Math.max(1, all.length));
     if (rms >= LOCAL_SPEECH_RMS) {
+      const speechStarted = !RT.userSpeaking;
       RT.userSpeaking = true;
       RT.lastVoiceAt = now;
       noteActivity(false);
+      if (speechStarted && RT.provider === "minicpm") {
+        rtStopPlayback();
+        RT.active = null;
+        setRtStatus("在听你说…");
+      }
     } else if (RT.userSpeaking && now - RT.lastVoiceAt >= 900) {
       RT.userSpeaking = false;
       noteActivity(true);
@@ -697,6 +776,7 @@ VIEWS.chat = async () => {
       RT.userSpeaking = false;
       RT.lastVoiceAt = 0;
       syncCallButtons();
+      if (videoRequested && !await startVideo()) videoRequested = false;
       await api.post("/volcengine/start", { session_id: CHAT.sessionId });
       noteActivity(true);
       setRtStatus("已接通，直接说话吧");
@@ -753,18 +833,9 @@ VIEWS.chat = async () => {
     RT.src.connect(RT.node);
     RT.node.connect(mute).connect(RT.ctx.destination);
 
-    const proto = location.protocol === "https:" ? "wss://" : "ws://";
-    const ws = new WebSocket(`${proto}${location.host}/api/realtime/ws?session_id=${CHAT.sessionId}&provider=${selectedProvider}`);
-    RT.ws = ws;
-    ws.onmessage = (e) => { let ev; try { ev = JSON.parse(e.data); } catch { return; } rtHandleEvent(ev); };
-    ws.onerror = () => { console.warn("[realtime] ws error（交给 onclose 处理）"); };
-    ws.onclose = () => {
-      if (RT.ws !== ws || !RT.on) return;
-      endRealtime();
-      // 意外断线（不是用户结束/切页）才自动重连。
-      if (!manualEnd && CHAT.sessionId) { toast("语音断了，正在重连…"); setTimeout(() => { if (!manualEnd && CHAT.sessionId) startRealtime(); }, 800); }
-    };
-    toast(`📞 正在接通 ${providerLabel(selectedProvider)}…`);
+    if (videoRequested && !await startVideo()) videoRequested = false;
+    openRealtimeSocket(videoRequested);
+    toast(`${videoRequested ? "📹" : "📞"} 正在接通 ${providerLabel(selectedProvider)}…`);
     return true;
   }
 
@@ -805,7 +876,11 @@ VIEWS.chat = async () => {
 
   function syncCallButtons() {
     const call = $("#call-btn"), end = $("#end-btn");
-    if (call) call.hidden = RT.on;
+    if (call) {
+      call.hidden = RT.on;
+      if (!call.disabled) call.textContent = videoRequested ? "📹 视频接通" : "📞 语音接通";
+      call.title = videoRequested ? "以视频模式连接所选实时模型" : "以语音模式连接所选实时模型";
+    }
     if (end) end.hidden = !RT.on;
     syncVideoButton();
   }
@@ -815,12 +890,13 @@ VIEWS.chat = async () => {
       button.classList.toggle("active", button.dataset.provider === selectedProvider));
     syncVideoButton();
   }
-  $("#video-btn").onclick = () => RT.videoActive ? stopVideo() : startVideo();
+  $("#video-btn").onclick = () => toggleVideoMode();
   document.querySelectorAll("[data-provider]").forEach(button => button.onclick = async () => {
     const next = button.dataset.provider;
     if (next === selectedProvider || !providers[next]?.available) return;
     const reconnect = RT.on;
     selectedProvider = next;
+    if (!selectedConfig().supports_video) videoRequested = false;
     localStorage.setItem("ling-realtime-provider", next);
     endRealtime();
     renderProviderSwitch();
