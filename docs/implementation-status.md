@@ -6,6 +6,7 @@
 
 - 一个 FastAPI 服务提供旧玩偶调试台、儿童 PWA、家长 PWA 与 JSON API。
 - Gemini Live、StepFun、MiniCPM-o 经 `/api/realtime/ws` 代理；火山引擎使用 ByteRTC 与独立控制面 API。
+- Gemini Live 提供四个服务端白名单音色 profile、静态 WAV 试听和非法 ID 回退，默认使用“小云朵”。
 - L1-L4、会话转写、事实演化、SRS、议程、私有 Canon、故事弧与成长快照落 SQLite。
 - 会话结束幂等处理冷路径，并可创建最多两次 attempt 的专属瞬间生成任务。
 - 基础世界由 `base_world.json` 驱动；视频变体分配持久化到 `world_assignments`。
@@ -42,4 +43,5 @@
 
 ## Change log
 
+- `2026-07-11`：加入 Gemini 角色音色预设与试听资产。
 - `2026-07-11`：首次按代码建立实现矩阵；记录产品规格、硬件提案与当前 Demo 的边界。

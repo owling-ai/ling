@@ -139,7 +139,14 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 
 /* ---------------- 聊天 ---------------- */
 .chat-wrap { display: grid; grid-template-columns: 1fr 280px; gap: 18px; align-items: start; }
-@media (max-width: 900px) { .chat-wrap { grid-template-columns: 1fr; } }
+.chat-side { min-width: 0; }
+@media (max-width: 900px) {
+  .chat-wrap { display: flex; flex-direction: column; }
+  .chat-side { display: contents; }
+  .voice-picker { order: -1; width: 100%; }
+  .chat-panel { order: 0; width: 100%; }
+  .chat-side > .side-card:not(.voice-picker) { order: 1; width: 100%; }
+}
 .chat-panel { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden; border: 1px solid rgba(240,228,211,.6); }
 .chat-head {
   display: flex; align-items: center; gap: 14px; padding: 16px 20px;
@@ -201,6 +208,31 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(242,125,82,.18); } }
 .side-card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; margin-bottom: 14px; border: 1px solid rgba(240,228,211,.6); }
 .side-card h3 { font-size: 14px; margin-bottom: 10px; color: var(--ink-2); }
+.voice-picker[hidden] { display: none; }
+.voice-options { border-top: 1px solid var(--line); }
+.voice-option {
+  min-height: 58px; display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid var(--line); transition: background .15s;
+}
+.voice-option:last-child { border-bottom: 0; }
+.voice-option.selected { background: var(--surface-2); }
+.voice-option label {
+  min-width: 0; flex: 1; min-height: 58px; display: flex; align-items: center;
+  gap: 9px; cursor: pointer; padding: 7px 0 7px 7px;
+}
+.voice-option input { width: 15px; height: 15px; accent-color: var(--coral-deep); flex: 0 0 15px; }
+.voice-swatch { width: 10px; height: 28px; border-radius: 5px; flex: 0 0 10px; }
+.voice-swatch.tone-1 { background: #72a7d8; }
+.voice-swatch.tone-2 { background: #e7a735; }
+.voice-swatch.tone-3 { background: #7a9a77; }
+.voice-swatch.tone-4 { background: #d67b68; }
+.voice-copy { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.voice-copy b { font-size: 13.5px; font-weight: 650; }
+.voice-copy small { color: var(--ink-2); font-size: 11.5px; white-space: normal; }
+.voice-preview {
+  width: 34px; height: 34px; flex: 0 0 34px; padding: 0; border-radius: 8px;
+  display: grid; place-items: center; font-size: 12px; color: var(--coral-deep);
+}
 .agenda-word { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-bottom: 1px dashed var(--line); font-size: 14px; }
 .agenda-word:last-child { border-bottom: none; }
 .agenda-word .w { font-weight: 700; }

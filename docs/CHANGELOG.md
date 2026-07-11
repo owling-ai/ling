@@ -9,6 +9,7 @@
 - 修正记忆架构中的 provider 类名和已实现范围：`MockMediaProvider`、`JimengArkProvider`，不再声称存在 Veo provider。
 - 为产品总览、三端规格、记忆架构和媒体生成页补充实现状态或 Change log。
 - 世界线提示词保留为内容生产资料，不并入运行时技术文档。
+- 新增 `docs/custom-voice.md`；实现四个 Gemini 角色音色、真实 Live 试听 WAV、profile 白名单选择和默认回退，并保留复制音色与 Cloud TTS 的实验边界。
 
 ## 维护约定
 

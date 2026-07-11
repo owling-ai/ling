@@ -11,8 +11,11 @@ ESP32 可在隔离网络中复用浏览器 Demo 协议：
 ```text
 POST /api/session/start
 WS   /api/realtime/ws?session_id=<id>&provider=gemini|stepfun|minicpm
+     Gemini 可选 &voice_profile=cloudlet|starlight|moonlamp|honeydrop
 POST /api/session/end
 ```
+
+Gemini 未传或传入非法 `voice_profile` 时使用 `cloudlet`，因此设备端可以完全不增加配置字段。
 
 当前响应和限制：
 

@@ -339,12 +339,19 @@ async def realtime_ws(
     session_id: str,
     provider: str | None = None,
     video: bool = False,
+    voice_profile: str | None = None,
 ):
     """浏览器与选定 WebSocket 实时模型之间的代理。"""
     if not _has_websocket_debug_access(ws):
         await ws.close(code=1008, reason="该接口仅允许本机访问或使用管理令牌")
         return
-    await realtime.bridge(ws, session_id, provider, video)
+    await realtime.bridge(
+        ws,
+        session_id,
+        provider,
+        video,
+        voice_profile=voice_profile,
+    )
 
 
 class VolcSessionBody(BaseModel):

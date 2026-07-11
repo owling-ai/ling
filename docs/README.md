@@ -7,6 +7,7 @@
 - [项目 README](../README.md)：启动、配置、架构、验证。
 - [实现状态](./implementation-status.md)：代码与产品规格的差异、已实现与延期项。
 - [实时音视频接入](./realtime.md)：四种 provider 的当前协议和限制。
+- [定制音色方案](./custom-voice.md)：Gemini 角色音色预设、复制音色实验边界与实施顺序。
 - [视频生成链路](./media-generation.md)：Mock 与 Seedance 的任务生命周期。
 - [ESP32 Device API 提案](./esp32-device-api.md)：硬件 P0 兼容方式和未实现的正式协议。
 

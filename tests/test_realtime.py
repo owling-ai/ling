@@ -79,3 +79,54 @@ def test_bridge_reports_stepfun_quota_instead_of_exception_name(
             "retryable": False,
         }
     ]
+
+
+def test_gemini_voice_profiles_expose_only_bundled_safe_choices() -> None:
+    profiles = [
+        profile
+        for profile in realtime.gemini_voice_profiles()
+        if profile["id"] != "legacy"
+    ]
+
+    assert [profile["id"] for profile in profiles] == [
+        "cloudlet",
+        "starlight",
+        "moonlamp",
+        "honeydrop",
+    ]
+    assert [profile["voice"] for profile in profiles] == [
+        "Leda",
+        "Achird",
+        "Vindemiatrix",
+        "Sulafat",
+    ]
+    assert all(profile["preview_url"].endswith(".wav") for profile in profiles)
+    assert all("style_instruction" not in profile for profile in profiles)
+
+
+def test_gemini_voice_profile_resolver_falls_back_to_cloudlet() -> None:
+    assert realtime.resolve_gemini_voice_profile("moonlamp")["voice"] == "Vindemiatrix"
+    assert realtime.resolve_gemini_voice_profile("not-a-profile")["id"] == "cloudlet"
+
+
+def test_gemini_setup_uses_profile_voice_and_style_instruction() -> None:
+    pack = {"doll_card": {"name": "灵灵"}, "child_card": {"name": "悠悠"}}
+
+    setup = realtime._gemini_setup(pack, "starlight")["setup"]
+    voice = setup["generationConfig"]["speechConfig"]["voiceConfig"]
+    instruction = setup["systemInstruction"]["parts"][0]["text"]
+
+    assert voice == {"prebuiltVoiceConfig": {"voiceName": "Achird"}}
+    assert "小星星" in instruction
+    assert "不要主持、播音或广告腔" in instruction
+
+
+def test_realtime_info_publishes_default_gemini_profile() -> None:
+    info = realtime.info()
+
+    assert info["default_gemini_voice_profile"] in {
+        profile["id"] for profile in info["gemini_voice_profiles"]
+    }
+    assert info["providers"]["gemini"]["voice_profile"] == info[
+        "default_gemini_voice_profile"
+    ]

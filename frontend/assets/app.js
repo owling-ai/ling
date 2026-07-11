@@ -175,6 +175,14 @@ VIEWS.chat = async () => {
     selectedProvider = Object.keys(providers).find(name => providers[name].available) || selectedProvider;
   }
   const selectedConfig = () => providers[selectedProvider] || {};
+  const voiceProfiles = STATE.realtime?.gemini_voice_profiles || [];
+  const voiceProfileById = id => voiceProfiles.find(profile => profile.id === id);
+  let selectedVoiceProfile = localStorage.getItem("ling-gemini-voice-profile")
+    || STATE.realtime?.default_gemini_voice_profile || voiceProfiles[0]?.id || "cloudlet";
+  if (!voiceProfileById(selectedVoiceProfile)) {
+    selectedVoiceProfile = STATE.realtime?.default_gemini_voice_profile || voiceProfiles[0]?.id || "cloudlet";
+  }
+  const selectedVoice = () => voiceProfileById(selectedVoiceProfile) || voiceProfiles[0] || {};
   let videoRequested = false;
 
   if (!STATE.realtime?.available) {
@@ -214,7 +222,22 @@ VIEWS.chat = async () => {
       </div>
       <div class="chat-log" id="log"></div>
     </div>
-    <div>
+    <div class="chat-side">
+      ${voiceProfiles.length ? `<div class="side-card voice-picker" id="voice-panel">
+        <h3>声音</h3>
+        <div class="voice-options" role="radiogroup" aria-label="Gemini 声音">
+          ${voiceProfiles.map((profile, index) => `<div class="voice-option" data-voice-option="${esc(profile.id)}">
+            <label>
+              <input type="radio" name="gemini-voice-profile" value="${esc(profile.id)}"
+                ${profile.id === selectedVoiceProfile ? "checked" : ""}>
+              <span class="voice-swatch tone-${index + 1}" aria-hidden="true"></span>
+              <span class="voice-copy"><b>${esc(profile.name)}</b><small>${esc(profile.description)}</small></span>
+            </label>
+            <button type="button" class="voice-preview" data-voice-preview="${esc(profile.id)}"
+              ${profile.preview_url ? "" : "disabled"} title="试听 ${esc(profile.name)}" aria-label="试听 ${esc(profile.name)}">▶</button>
+          </div>`).join("")}
+        </div>
+      </div>` : ""}
       <div class="side-card">
         <h3>🎯 今日编织进度</h3>
         <div id="agenda-box"><span class="chip ghost">开始会话后加载</span></div>
@@ -250,6 +273,8 @@ VIEWS.chat = async () => {
                videoCanvas: null, videoTimer: null, videoSwitching: false, rtcEngine: null, rtcInfo: null,
                volcSubtitleBubbles: new Map(), idleTimer: null, idleNudgesSent: 0,
                lastActivityAt: 0, userSpeaking: false, lastVoiceAt: 0 };
+  let previewAudio = null;
+  let previewButton = null;
   const rtInputRate = () => selectedConfig().input_sample_rate || 24000;
   const rtOutputRate = () => selectedConfig().output_sample_rate || 24000;
   const IDLE_FIRST_MS = 20000, IDLE_NEXT_MS = 45000, IDLE_MAX_NUDGES = 2;
@@ -273,6 +298,64 @@ VIEWS.chat = async () => {
     }).join("") || '<span class="chip ghost">今天没有复习议程</span>';
   }
 
+  function stopVoicePreview() {
+    if (previewAudio) {
+      previewAudio.pause();
+      previewAudio.currentTime = 0;
+    }
+    if (previewButton) {
+      previewButton.textContent = "▶";
+      previewButton.setAttribute("aria-label", previewButton.title);
+    }
+    previewAudio = null;
+    previewButton = null;
+  }
+
+  function renderVoicePicker() {
+    const panel = $("#voice-panel");
+    if (!panel) return;
+    panel.hidden = selectedProvider !== "gemini";
+    document.querySelectorAll("[data-voice-option]").forEach(option => {
+      const input = $("input", option);
+      const selected = input.value === selectedVoiceProfile;
+      option.classList.toggle("selected", selected);
+      input.checked = selected;
+      input.disabled = RT.on;
+      const preview = $("[data-voice-preview]", option);
+      if (preview) preview.disabled = RT.on || !voiceProfileById(input.value)?.preview_url;
+    });
+  }
+
+  document.querySelectorAll('input[name="gemini-voice-profile"]').forEach(input => {
+    input.onchange = () => {
+      if (RT.on || !voiceProfileById(input.value)) return;
+      selectedVoiceProfile = input.value;
+      localStorage.setItem("ling-gemini-voice-profile", selectedVoiceProfile);
+      renderVoicePicker();
+    };
+  });
+  document.querySelectorAll("[data-voice-preview]").forEach(button => {
+    button.onclick = async () => {
+      const profile = voiceProfileById(button.dataset.voicePreview);
+      if (!profile?.preview_url) return;
+      if (previewButton === button && previewAudio && !previewAudio.paused) {
+        stopVoicePreview();
+        return;
+      }
+      stopVoicePreview();
+      const audio = new Audio(profile.preview_url);
+      previewAudio = audio;
+      previewButton = button;
+      button.textContent = "■";
+      button.setAttribute("aria-label", `停止试听 ${profile.name}`);
+      audio.onended = stopVoicePreview;
+      audio.onerror = () => { stopVoicePreview(); toast("试听加载失败"); };
+      try { await audio.play(); }
+      catch { stopVoicePreview(); toast("试听播放失败"); }
+    };
+  });
+  renderVoicePicker();
+
   // 回合记账结果：后端把编织/正典/撤退状态随 ling.state 推回来。
   // ling.state 每回合都来、状态是累计的，所以只在「首次跃迁」时提示一次，别刷屏。
   const notified = { retreated: false, canonCount: 0 };
@@ -287,6 +370,7 @@ VIEWS.chat = async () => {
 
   $("#call-btn").onclick = async () => {
     const button = $("#call-btn");
+    stopVoicePreview();
     manualEnd = false;
     button.disabled = true; button.textContent = videoRequested ? "正在接通视频…" : "正在接通语音…";
     await startRealtime();
@@ -494,6 +578,7 @@ VIEWS.chat = async () => {
       provider: selectedProvider,
     });
     if (selectedProvider === "minicpm") query.set("video", videoMode ? "1" : "0");
+    if (selectedProvider === "gemini") query.set("voice_profile", selectedVoiceProfile);
     const ws = new WebSocket(`${proto}${location.host}/api/realtime/ws?${query}`);
     RT.ws = ws;
     ws.onmessage = (e) => { let ev; try { ev = JSON.parse(e.data); } catch { return; } rtHandleEvent(ev); };
@@ -607,7 +692,7 @@ VIEWS.chat = async () => {
       case "session.created":
       case "session.updated":   // 开场问候由后端注入人设后主动触发（realtime.py），前端不重复发
         noteActivity(false);
-        setRtStatus("已接通，直接说话吧"); break;
+        setRtStatus(ev.voice_name ? `${ev.voice_name}已接通，直接说话吧` : "已接通，直接说话吧"); break;
       case "input_audio_buffer.speech_started":   // 孩子开口 → 立刻停播 + 掐断在讲的回复
         RT.userSpeaking = true;
         noteActivity(false);
@@ -677,9 +762,10 @@ VIEWS.chat = async () => {
     $("#rt-bar")?.remove();
     const bar = document.createElement("div");
     bar.className = "call-bar"; bar.id = "rt-bar";
+    const voice = selectedProvider === "gemini" ? ` · ${esc(selectedVoice().name || "")}` : "";
     bar.innerHTML = `${FOX(46)}
       <div class="call-status"><span class="call-dot"></span><b id="rt-status">正在接通…</b>
-        <span class="hint">${providerLabel(selectedProvider)} · ${esc(selectedConfig().model || "")} · 直接说话，开口即可打断。戴耳机效果最好。</span></div>`;
+        <span class="hint">${providerLabel(selectedProvider)}${voice} · ${esc(selectedConfig().model || "")} · 直接说话，开口即可打断。戴耳机效果最好。</span></div>`;
     log.parentNode.insertBefore(bar, log);
   }
 
@@ -883,18 +969,21 @@ VIEWS.chat = async () => {
     }
     if (end) end.hidden = !RT.on;
     syncVideoButton();
+    renderVoicePicker();
   }
 
   function renderProviderSwitch() {
     document.querySelectorAll("[data-provider]").forEach(button =>
       button.classList.toggle("active", button.dataset.provider === selectedProvider));
     syncVideoButton();
+    renderVoicePicker();
   }
   $("#video-btn").onclick = () => toggleVideoMode();
   document.querySelectorAll("[data-provider]").forEach(button => button.onclick = async () => {
     const next = button.dataset.provider;
     if (next === selectedProvider || !providers[next]?.available) return;
     const reconnect = RT.on;
+    stopVoicePreview();
     selectedProvider = next;
     if (!selectedConfig().supports_video) videoRequested = false;
     localStorage.setItem("ling-realtime-provider", next);
@@ -908,6 +997,7 @@ VIEWS.chat = async () => {
   // 离开聊天页视为结束本次通话，并正常触发冷路径结算。
   window.addEventListener("hashchange", () => {
     manualEnd = true;
+    stopVoicePreview();
     endRealtime();
     const sid = CHAT?.sessionId;
     if (sid) {

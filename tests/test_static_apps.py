@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import wave
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -95,6 +97,41 @@ def test_manifest_media_urls_exist_without_network(client: TestClient) -> None:
         response = client.get(url)
         assert response.status_code == 200, url
         assert response.headers["content-type"].startswith(("video/", "image/"))
+
+
+def test_gemini_voice_preview_assets_are_served_as_pcm_wav(client: TestClient) -> None:
+    for profile in realtime.gemini_voice_profiles():
+        if not profile["preview_url"]:
+            continue
+        response = client.get(profile["preview_url"])
+        assert response.status_code == 200, profile["id"]
+        assert response.headers["content-type"].startswith("audio/")
+        assert response.content[:4] == b"RIFF"
+        assert response.content[8:12] == b"WAVE"
+        assert len(response.content) > 100_000
+
+
+def test_gemini_voice_preview_manifest_matches_bundled_wav_files() -> None:
+    voice_root = FRONTEND_ROOT / "assets" / "voices"
+    manifest = json.loads((voice_root / "manifest.json").read_text(encoding="utf-8"))
+
+    assert manifest["model"] == "gemini-3.1-flash-live-preview"
+    assert manifest["sample_rate"] == 24000
+    assert [item["id"] for item in manifest["profiles"]] == [
+        "cloudlet",
+        "starlight",
+        "moonlamp",
+        "honeydrop",
+    ]
+    for item in manifest["profiles"]:
+        path = voice_root / item["file"]
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
+        with wave.open(str(path), "rb") as audio:
+            assert audio.getnchannels() == 1
+            assert audio.getsampwidth() == 2
+            assert audio.getframerate() == 24000
+            duration = audio.getnframes() / audio.getframerate()
+        assert duration == pytest.approx(item["duration_seconds"], abs=0.001)
 
 
 def test_mobile_app_source_does_not_request_legacy_or_admin_apis() -> None:
@@ -228,6 +265,15 @@ def test_legacy_console_supports_preselected_video_and_minicpm_mode_switching() 
     assert 'speechStarted && RT.provider === "minicpm"' in source
 
 
+def test_legacy_console_selects_and_previews_gemini_voice_profiles() -> None:
+    source = (FRONTEND_ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+
+    assert 'localStorage.getItem("ling-gemini-voice-profile")' in source
+    assert 'query.set("voice_profile", selectedVoiceProfile)' in source
+    assert "new Audio(profile.preview_url)" in source
+    assert 'input[name="gemini-voice-profile"]' in source
+
+
 def test_remote_realtime_websocket_requires_debug_access(
     isolated_db: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -254,11 +300,20 @@ def test_remote_realtime_websocket_accepts_configured_token(
     monkeypatch.delenv("LING_ALLOW_UNAUTHENTICATED", raising=False)
 
     async def fake_bridge(
-        ws, session_id: str, provider: str | None, video: bool = False
+        ws,
+        session_id: str,
+        provider: str | None,
+        video: bool = False,
+        voice_profile: str | None = None,
     ) -> None:
         await ws.accept()
         await ws.send_json(
-            {"session_id": session_id, "provider": provider, "video": video}
+            {
+                "session_id": session_id,
+                "provider": provider,
+                "video": video,
+                "voice_profile": voice_profile,
+            }
         )
         await ws.close()
 
@@ -271,12 +326,14 @@ def test_remote_realtime_websocket_accepts_configured_token(
         headers={"Authorization": "Bearer demo-test-token"},
     ) as remote:
         with remote.websocket_connect(
-            "/api/realtime/ws?session_id=private&provider=minicpm&video=1"
+            "/api/realtime/ws?session_id=private&provider=gemini&video=1"
+            "&voice_profile=moonlamp"
         ) as socket:
             assert socket.receive_json() == {
                 "session_id": "private",
-                "provider": "minicpm",
+                "provider": "gemini",
                 "video": True,
+                "voice_profile": "moonlamp",
             }
 
 
@@ -292,6 +349,7 @@ def test_hackathon_mode_allows_public_realtime_websocket_without_token(
         session_id: str,
         provider: str | None,
         video: bool = False,
+        voice_profile: str | None = None,
     ) -> None:
         await ws.accept()
         await ws.send_json({"session_id": session_id, "provider": provider})

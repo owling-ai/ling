@@ -23,6 +23,14 @@ Gemini -> StepFun -> 火山 RTC -> MiniCPM-o
 
 旧调试台可以在可用 provider 之间切换。切换 MiniCPM 的音频/视频模式会重连上游传输层，但继续使用同一个 Ling 业务会话。
 
+## Gemini 音色预设
+
+Gemini 默认使用 `cloudlet`（小云朵），另有 `starlight`（小星星）、`moonlamp`（月亮灯）和 `honeydrop`（蜂蜜糖）。每个 profile 在后端固定映射到预置 voice、风格 instruction 和静态试听 WAV；前端只能提交 profile ID，不能透传任意上游 voice 配置。
+
+旧调试台会把选择保存在 `localStorage`，并在 Gemini WebSocket 建连时携带 `voice_profile`。选择仅在下一次建连生效，通话中不可更改。未传、非法或已删除的 ID 回退到 `cloudlet`。服务端默认值可用 `LING_GEMINI_VOICE_PROFILE` 调整；`LING_GEMINI_VOICE` 仅供 `legacy` 兼容模式使用。
+
+试听文件由 `scripts/generate_voice_previews.py` 通过真实 `gemini-3.1-flash-live-preview` 会话生成，格式为 24 kHz、mono、16-bit PCM WAV。生成 manifest 记录模型、统一台词、转写、时长和 SHA-256。
+
 ## 会话契约
 
 ```text
@@ -30,6 +38,7 @@ POST /api/session/start
   -> session_id, opening, review_items
 
 WS /api/realtime/ws?session_id=...&provider=gemini|stepfun|minicpm&video=0|1
+  Gemini 可附加 &voice_profile=cloudlet|starlight|moonlamp|honeydrop
   或火山 /api/volcengine/prepare|start|observe|subtitle|stop
 
 POST /api/session/end
@@ -49,6 +58,7 @@ POST /api/session/end
 ## 已知限制
 
 - Gemini 集成 ASR 是附带转写，不保证逐字对应原生音频。
+- Gemini profile 能稳定选择底声，但 Live API 没有公开数值化音高、语速或气息控制，风格细节会有回合波动。
 - MiniCPM 当前没有用户侧转写，依赖用户文本的记忆和词汇记账不完整。
 - StepFun 当前不发送视频。
 - 火山必须使用“AI 音视频互动方案”应用，不能混用“实时对话式 AI”AppId。
@@ -56,4 +66,5 @@ POST /api/session/end
 
 ## Change log
 
+- `2026-07-11`：加入四个 Gemini 音色 profile、试听资产、白名单查询参数和默认回退规则。
 - `2026-07-11`：从 2026-07-10 调研记录提取仍有效结论；加入 MiniCPM，删除账户、费用、提交号和排障过程等易过期内容。

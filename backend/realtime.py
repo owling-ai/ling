@@ -44,6 +44,93 @@ GEMINI_TRANSCRIPTION_LANGUAGES = [
     if code.strip()
 ]
 
+GEMINI_VOICE_PROFILES = (
+    {
+        "id": "cloudlet",
+        "name": "小云朵",
+        "voice": "Leda",
+        "description": "清亮轻软，自然童真",
+        "preview_url": "/assets/voices/cloudlet.wav",
+        "style_instruction": (
+            "声音清亮轻软，带自然的年轻感和童真。语速略慢，音量平稳，"
+            "句尾轻轻收住；不要模仿婴儿，不要故意夹嗓或持续使用高音。"
+        ),
+    },
+    {
+        "id": "starlight",
+        "name": "小星星",
+        "voice": "Achird",
+        "description": "亲切灵动，带着好奇",
+        "preview_url": "/assets/voices/starlight.wav",
+        "style_instruction": (
+            "声音亲切灵动，带一点微笑和好奇感。像熟悉的小伙伴随口说话，"
+            "语速中等，活泼但吐字清楚；不要主持、播音或广告腔，兴奋时也不要尖叫。"
+        ),
+    },
+    {
+        "id": "moonlamp",
+        "name": "月亮灯",
+        "voice": "Vindemiatrix",
+        "description": "轻柔安定，故事感",
+        "preview_url": "/assets/voices/moonlamp.wav",
+        "style_instruction": (
+            "声音轻柔安定，像在近距离自然地讲故事。语速中等偏慢，停顿松弛；"
+            "保持清醒和明亮，不要低沉困倦、耳语、气声过重或拖长尾音。"
+        ),
+    },
+    {
+        "id": "honeydrop",
+        "name": "蜂蜜糖",
+        "voice": "Sulafat",
+        "description": "温暖圆润，很有陪伴感",
+        "preview_url": "/assets/voices/honeydrop.wav",
+        "style_instruction": (
+            "声音温暖圆润，让人觉得安心和被陪伴。发声放松、打开，语速中等，"
+            "情绪变化柔和；不要夹嗓、挤压喉咙、使用成熟播音腔或显得困倦。"
+        ),
+    },
+)
+_GEMINI_VOICE_PROFILE_BY_ID = {
+    profile["id"]: profile for profile in GEMINI_VOICE_PROFILES
+}
+_configured_gemini_voice_profile = os.environ.get(
+    "LING_GEMINI_VOICE_PROFILE", "cloudlet"
+).strip().lower()
+GEMINI_DEFAULT_VOICE_PROFILE = (
+    _configured_gemini_voice_profile
+    if _configured_gemini_voice_profile in _GEMINI_VOICE_PROFILE_BY_ID
+    or _configured_gemini_voice_profile == "legacy"
+    else "cloudlet"
+)
+
+
+def resolve_gemini_voice_profile(profile_id: str | None = None) -> dict:
+    requested = (profile_id or GEMINI_DEFAULT_VOICE_PROFILE).strip().lower()
+    if requested == "legacy":
+        return {
+            "id": "legacy",
+            "name": "兼容音色",
+            "voice": GEMINI_VOICE,
+            "description": "使用 LING_GEMINI_VOICE",
+            "preview_url": None,
+            "style_instruction": "保持自然、亲切、简短的陪伴式说话方式。",
+        }
+    return _GEMINI_VOICE_PROFILE_BY_ID.get(
+        requested, _GEMINI_VOICE_PROFILE_BY_ID["cloudlet"]
+    )
+
+
+def gemini_voice_profiles() -> list[dict]:
+    public_keys = ("id", "name", "voice", "description", "preview_url")
+    profiles = [
+        {key: profile[key] for key in public_keys} for profile in GEMINI_VOICE_PROFILES
+    ]
+    if GEMINI_DEFAULT_VOICE_PROFILE == "legacy":
+        legacy = resolve_gemini_voice_profile("legacy")
+        profiles.insert(0, {key: legacy[key] for key in public_keys})
+    return profiles
+
+
 MINICPM_BASE_URL = os.environ.get("LING_MINICPM_BASE_URL", "").strip()
 MINICPM_REALTIME_URL = os.environ.get("LING_MINICPM_REALTIME_URL", "").strip()
 MINICPM_API_KEY = os.environ.get("LING_MINICPM_API_KEY", "").strip()
@@ -76,7 +163,8 @@ PROVIDER_INFO = {
     },
     "gemini": {
         "model": GEMINI_MODEL,
-        "voice": GEMINI_VOICE,
+        "voice": resolve_gemini_voice_profile()["voice"],
+        "voice_profile": resolve_gemini_voice_profile()["id"],
         "input_sample_rate": 16000,
         "output_sample_rate": 24000,
         "supports_video": True,
@@ -191,6 +279,8 @@ def info() -> dict:
         "sample_rate": current["input_sample_rate"],
         "input_sample_rate": current["input_sample_rate"],
         "output_sample_rate": current["output_sample_rate"],
+        "gemini_voice_profiles": gemini_voice_profiles(),
+        "default_gemini_voice_profile": resolve_gemini_voice_profile()["id"],
     }
 
 
@@ -435,8 +525,16 @@ def _provider_error_event(provider: str, exc: Exception) -> dict:
     }
 
 
-def _system_instruction(pack: dict) -> str:
-    return prompts.build_doll_system(pack) + VOICE_NOTE
+def _system_instruction(pack: dict, voice_profile: dict | None = None) -> str:
+    instruction = prompts.build_doll_system(pack) + VOICE_NOTE
+    if not voice_profile:
+        return instruction
+    return instruction + (
+        "\n\n# 固定声音角色（整场保持一致）\n"
+        f"本场使用「{voice_profile['name']}」声音："
+        f"{voice_profile['style_instruction']}"
+        "从开场到挂断始终保持同一种听感，不要解释或提及这些声音要求。"
+    )
 
 
 def _opening_instruction(pack: dict) -> str:
@@ -619,9 +717,10 @@ async def _bridge_stepfun(client, session_id: str, pack: dict):
     await _run_pumps(client, upstream, pump_up, pump_down)
 
 
-def _gemini_setup(pack: dict) -> dict:
+def _gemini_setup(pack: dict, voice_profile: str | None = None) -> dict:
     model = GEMINI_MODEL if GEMINI_MODEL.startswith("models/") else f"models/{GEMINI_MODEL}"
     transcription = _gemini_transcription_config(pack)
+    profile = resolve_gemini_voice_profile(voice_profile)
     return {
         "setup": {
             "model": model,
@@ -629,11 +728,13 @@ def _gemini_setup(pack: dict) -> dict:
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
                     "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": GEMINI_VOICE}
+                        "prebuiltVoiceConfig": {"voiceName": profile["voice"]}
                     }
                 },
             },
-            "systemInstruction": {"parts": [{"text": _system_instruction(pack)}]},
+            "systemInstruction": {
+                "parts": [{"text": _system_instruction(pack, profile)}]
+            },
             "realtimeInputConfig": {
                 "automaticActivityDetection": {
                     "disabled": False,
@@ -647,16 +748,29 @@ def _gemini_setup(pack: dict) -> dict:
     }
 
 
-async def _bridge_gemini(client, session_id: str, pack: dict):
+async def _bridge_gemini(
+    client, session_id: str, pack: dict, voice_profile: str | None = None
+):
+    profile = resolve_gemini_voice_profile(voice_profile)
     upstream = await _connect(
         GEMINI_URL, {"x-goog-api-key": os.environ["GEMINI_API_KEY"]}
     )
-    await upstream.send(json.dumps(_gemini_setup(pack), ensure_ascii=False))
+    await upstream.send(
+        json.dumps(_gemini_setup(pack, profile["id"]), ensure_ascii=False)
+    )
     first = json.loads(await asyncio.wait_for(upstream.recv(), timeout=20))
     if "setupComplete" not in first:
         raise RuntimeError((first.get("error") or {}).get("message", "Gemini setup 失败"))
 
-    await _send_json(client, {"type": "session.created", "provider": "gemini"})
+    await _send_json(
+        client,
+        {
+            "type": "session.created",
+            "provider": "gemini",
+            "voice_profile": profile["id"],
+            "voice_name": profile["name"],
+        },
+    )
     await upstream.send(
         json.dumps(
             {
@@ -678,8 +792,8 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
         )
     )
     _log(
-        f"已接通 Gemini Live · {GEMINI_MODEL} · voice={GEMINI_VOICE} · "
-        f"session={session_id}"
+        f"已接通 Gemini Live · {GEMINI_MODEL} · profile={profile['id']} · "
+        f"voice={profile['voice']} · session={session_id}"
     )
 
     response_id = ""
@@ -1103,7 +1217,11 @@ async def _run_pumps(client, upstream, pump_up, pump_down, close_message=None):
 
 
 async def bridge(
-    client, session_id: str, provider: str | None = None, video: bool = False
+    client,
+    session_id: str,
+    provider: str | None = None,
+    video: bool = False,
+    voice_profile: str | None = None,
 ):
     """浏览器与指定实时模型之间的双向代理，并把转写写入记忆引擎。"""
     await client.accept()
@@ -1135,7 +1253,9 @@ async def bridge(
         if provider == "volcengine":
             raise RuntimeError("Volcengine uses the ByteRTC REST control plane")
         if provider == "gemini":
-            await _bridge_gemini(client, session_id, session["pack"])
+            await _bridge_gemini(
+                client, session_id, session["pack"], voice_profile=voice_profile
+            )
         elif provider == "minicpm":
             await _bridge_minicpm(client, session_id, session["pack"], video)
         else:
