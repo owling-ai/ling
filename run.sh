@@ -3,4 +3,5 @@
 set -e
 cd "$(dirname "$0")"
 uv sync -q
-exec uv run uvicorn backend.app:app --host 0.0.0.0 --port 8888 "$@"
+export LING_PROVIDER="${LING_PROVIDER:-mock}"
+exec uv run uvicorn backend.app:app --host 127.0.0.1 --port 8888 "$@"

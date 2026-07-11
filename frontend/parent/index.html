@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f1e8">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161b28">
+  <meta name="color-scheme" content="light">
+  <meta name="application-name" content="训练师手册">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="训练师手册">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="description" content="灵 Ling 家长端训练师手册">
+  <meta property="og:title" content="训练师手册 | 灵 Ling">
+  <meta property="og:description" content="只看成长摘要和共同信物，不展示孩子原始对话。">
+  <title>训练师手册 | 灵 Ling</title>
+  <link rel="manifest" href="/parent/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/parent/icon-192.png">
+  <link rel="stylesheet" href="/parent/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#app-main">跳到主要内容</a>
+  <div class="app-shell">
+    <header class="app-header">
+      <div class="brand-row">
+        <div class="brand-mark" aria-hidden="true">灵</div>
+        <div>
+          <p class="brand-name">LING FAMILY</p>
+          <p class="brand-subtitle">共同成长的玩偶</p>
+        </div>
+      </div>
+      <h1>训练师手册</h1>
+      <p class="header-summary">同一份记忆，换一副专业眼镜。共养，不监控。</p>
+    </header>
+
+    <nav class="tab-bar" aria-label="家长工作视图">
+      <div class="tab-list" role="tablist" aria-label="训练师手册" aria-orientation="horizontal">
+        <button id="tab-today" type="button" role="tab" aria-selected="true" aria-controls="panel-today" data-tab="today" tabindex="0">今日</button>
+        <button id="tab-growth" type="button" role="tab" aria-selected="false" aria-controls="panel-growth" data-tab="growth" tabindex="-1">成长</button>
+        <button id="tab-memory" type="button" role="tab" aria-selected="false" aria-controls="panel-memory" data-tab="memory" tabindex="-1">记忆</button>
+        <button id="tab-guardian" type="button" role="tab" aria-selected="false" aria-controls="panel-guardian" data-tab="guardian" tabindex="-1">守护</button>
+      </div>
+    </nav>
+
+    <main id="app-main" tabindex="-1">
+      <section id="panel-today" class="view-panel" role="tabpanel" aria-labelledby="tab-today" tabindex="0">
+        <div class="initial-state" aria-live="polite">正在准备今日速览</div>
+      </section>
+      <section id="panel-growth" class="view-panel" role="tabpanel" aria-labelledby="tab-growth" tabindex="0" hidden>
+        <div class="initial-state" aria-live="polite">切换到成长时加载</div>
+      </section>
+      <section id="panel-memory" class="view-panel" role="tabpanel" aria-labelledby="tab-memory" tabindex="0" hidden>
+        <div class="initial-state" aria-live="polite">切换到记忆时加载</div>
+      </section>
+      <section id="panel-guardian" class="view-panel" role="tabpanel" aria-labelledby="tab-guardian" tabindex="0" hidden>
+        <div class="initial-state" aria-live="polite">切换到守护时加载</div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="rights-dialog" aria-labelledby="rights-title" aria-describedby="rights-body rights-notice">
+    <div class="dialog-heading">
+      <h2 id="rights-title">数据权利说明</h2>
+      <form method="dialog">
+        <button class="icon-button" type="submit" value="close" aria-label="关闭数据权利说明" title="关闭">×</button>
+      </form>
+    </div>
+    <p id="rights-body"></p>
+    <p id="rights-notice" class="dialog-notice"></p>
+    <div class="rights-scope" aria-label="数据权利范围">
+      <div><b>全量导出</b><span>通过独立流程提供孩子账户相关数据。</span></div>
+      <div><b>账户注销</b><span>进入待删除状态后停止召回与生成，再执行销毁。</span></div>
+      <div><b>普通记忆</b><span>不提供挑着删来改写共同经历的功能。</span></div>
+    </div>
+    <form method="dialog" class="dialog-actions">
+      <button class="primary-button" type="submit" value="close">我知道了</button>
+    </form>
+  </dialog>
+
+  <p id="status-announcer" class="sr-only" aria-live="polite"></p>
+  <noscript>请启用 JavaScript 查看家长端投影。</noscript>
+  <script type="module" src="/parent/app.mjs"></script>
+</body>
+</html>

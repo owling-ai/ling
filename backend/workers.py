@@ -6,14 +6,36 @@
 """
 import json
 import re
+import threading
+import weakref
 from collections import Counter
 
 from . import db, life, llm, memory, prompts
 
+ALLOWED_EMOTIONS = {"开心", "兴奋", "平静", "难过", "害怕", "骄傲"}
+
 
 # ---------------------------------------------------------------- 会话后处理
 
+_SESSION_LOCKS = weakref.WeakValueDictionary()
+_SESSION_LOCKS_GUARD = threading.Lock()
+
+
+def _session_lock(session_id_db: int):
+    with _SESSION_LOCKS_GUARD:
+        lock = _SESSION_LOCKS.get(session_id_db)
+        if lock is None:
+            lock = threading.Lock()
+            _SESSION_LOCKS[session_id_db] = lock
+        return lock
+
+
 def process_session(session_id_db: int) -> dict:
+    with _session_lock(session_id_db):
+        return _process_session_locked(session_id_db)
+
+
+def _process_session_locked(session_id_db: int) -> dict:
     sess = db.q1("SELECT * FROM sessions WHERE id=?", (session_id_db,))
     if not sess or sess["processed"]:
         return db.jloads(sess["cold_result_json"], {}) if sess else {}
@@ -27,17 +49,21 @@ def process_session(session_id_db: int) -> dict:
     doll_card = memory.get_card(child_id, "doll")
     child_card = memory.get_card(child_id, "child")
 
-    # ---- L2 日记
+    # Generate candidate derivations before claiming the short write transaction.
     diary = llm.worker_json(prompts.DIARY_PROMPT.format(
         doll_name=doll_card.get("name", "灵灵"), child_name=child_card.get("name", "孩子"),
         transcript=transcript_text)) if llm.worker_live() else None
     if not isinstance(diary, dict) or "summary" not in diary:
         diary = _mock_diary(child_card, child_msgs, doll_msgs)
-    diary_id = memory.add_diary(
-        child_id, diary["summary"], diary.get("emotions"), diary.get("topics"),
-        diary.get("quotes"), diary.get("open_loop", ""))
+    raw_emotions = diary.get("emotions")
+    diary["emotions"] = [
+        emotion
+        for emotion in raw_emotions
+        if isinstance(emotion, str) and emotion in ALLOWED_EMOTIONS
+    ] if isinstance(raw_emotions, list) else []
+    if not diary["emotions"]:
+        diary["emotions"] = ["平静"]
 
-    # ---- L3 事实
     known = [{"text": f["text"], "subject_key": f["subject_key"]}
              for f in memory.list_facts(child_id, active_only=True)]
     facts = llm.worker_json(prompts.FACTS_PROMPT.format(
@@ -45,38 +71,75 @@ def process_session(session_id_db: int) -> dict:
         transcript=transcript_text)) if llm.worker_live() else None
     if not isinstance(facts, list):
         facts = _mock_facts(child_msgs)
-    new_facts = []
-    for f in facts:
-        if not f.get("text"):
-            continue
-        if any(k["text"] == f["text"] for k in known):
-            continue
-        memory.add_fact(child_id, f["text"], f.get("category", "habit"), f.get("subject_key", ""),
-                        f.get("confidence", 0.7), source=f"session:{session_id_db}",
-                        supersedes_key=f.get("supersedes_key", ""))
-        new_facts.append(f["text"])
 
-    # ---- 掌握度判定（曝光/识别/产出）
     agenda = db.q1("SELECT * FROM session_agenda WHERE child_id=? ORDER BY date DESC LIMIT 1", (child_id,))
     items = [r for r in db.jloads(agenda["review_items_json"]) if r.get("type") == "word"] if agenda else []
-    mastery_updates = []
+    judged_mastery = []
     for r in items:
         result = _judge_item(r, child_msgs, doll_msgs)
         if result != "none":
-            life.record_mastery(child_id, r["item_id"], result)
-            mastery_updates.append({"word": r["word"], "zh": r["zh"], "result": result})
+            judged_mastery.append((r, result))
 
-    # ---- 关系经验值：一场会话 +5，孩子做了故事决定再 +5
-    canon_by_child = db.q(
-        "SELECT COUNT(*) n FROM doll_canon WHERE child_id=? AND by_child=1 AND established_at>=?",
-        (child_id, sess["started_at"]))[0]["n"]
-    rel = life.add_relationship_xp(child_id, 5 + 5 * canon_by_child)
+    with db.transaction(immediate=True) as conn:
+        current = conn.execute(
+            "SELECT * FROM sessions WHERE id=?", (session_id_db,)
+        ).fetchone()
+        if not current:
+            return {}
+        if current["processed"]:
+            return db.jloads(current["cold_result_json"], {})
 
-    result = {"diary": {**diary, "id": diary_id}, "new_facts": new_facts,
-              "mastery_updates": mastery_updates, "relationship": rel}
-    db.execute("UPDATE sessions SET ended_at=?, processed=1, cold_result_json=? WHERE id=?",
-               (db.now(), json.dumps(result, ensure_ascii=False), session_id_db))
-    return result
+        diary_id = memory.add_diary(
+            child_id, diary["summary"], diary.get("emotions"), diary.get("topics"),
+            diary.get("quotes"), diary.get("open_loop", ""))
+
+        new_facts = []
+        for fact in facts:
+            if not fact.get("text"):
+                continue
+            if any(item["text"] == fact["text"] for item in known):
+                continue
+            if db.q1(
+                "SELECT id FROM facts WHERE child_id=? AND text=? AND superseded_by IS NULL",
+                (child_id, fact["text"]),
+            ):
+                continue
+            memory.add_fact(
+                child_id,
+                fact["text"],
+                fact.get("category", "habit"),
+                fact.get("subject_key", ""),
+                fact.get("confidence", 0.7),
+                source=f"session:{session_id_db}",
+                supersedes_key=fact.get("supersedes_key", ""),
+            )
+            new_facts.append(fact["text"])
+
+        mastery_updates = []
+        for item, judged_result in judged_mastery:
+            life.record_mastery(child_id, item["item_id"], judged_result)
+            mastery_updates.append(
+                {"word": item["word"], "zh": item["zh"], "result": judged_result}
+            )
+
+        canon_by_child = db.q(
+            "SELECT COUNT(*) n FROM doll_canon "
+            "WHERE child_id=? AND by_child=1 AND established_at>=?",
+            (child_id, sess["started_at"]),
+        )[0]["n"]
+        rel = life.add_relationship_xp(child_id, 5 + 5 * canon_by_child)
+        result = {
+            "diary": {**diary, "id": diary_id},
+            "new_facts": new_facts,
+            "mastery_updates": mastery_updates,
+            "relationship": rel,
+        }
+        db.execute(
+            "UPDATE sessions SET ended_at=?,processed=1,processing=0,"
+            "processing_started_at=NULL,cold_result_json=? WHERE id=? AND processed=0",
+            (db.now(), json.dumps(result, ensure_ascii=False), session_id_db),
+        )
+        return result
 
 
 def _judge_item(item, child_msgs, doll_msgs) -> str:

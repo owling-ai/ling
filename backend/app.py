@@ -4,19 +4,35 @@
 启动：uvicorn backend.app:app --reload
 """
 import json
+import hmac
+import ipaddress
 import os
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from . import db, engine, life, llm, memory, realtime, seed, volcengine_rtc, workers  # noqa: E402
+from . import (  # noqa: E402
+    db,
+    engine,
+    experience,
+    jimeng_video,
+    life,
+    llm,
+    media,
+    media_worker,
+    memory,
+    realtime,
+    seed,
+    volcengine_rtc,
+    workers,
+)
 
 app = FastAPI(title="灵 · 共同成长玩偶记忆服务")
 
@@ -34,25 +50,162 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+_PROTECTED_API_PATHS = {
+    "/api/state",
+    "/api/onboarding",
+    "/api/curriculum",
+    "/api/diary",
+    "/api/facts",
+    "/api/growth",
+    "/api/mastery",
+    "/api/report",
+    "/api/world",
+}
+_PROTECTED_API_PREFIXES = (
+    "/api/admin/",
+    "/api/facts/",
+    "/api/session/",
+    "/api/volcengine/",
+    "/api/realtime/",
+)
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or bool(mapped and mapped.is_loopback)
+
+
+def _is_local_request(request: Request) -> bool:
+    client_host = request.client.host if request.client else ""
+    if client_host == "testclient":
+        return True
+    if any(
+        request.headers.get(header)
+        for header in ("forwarded", "x-forwarded-for", "x-real-ip")
+    ):
+        return False
+    destination_host = request.url.hostname or ""
+    return _is_loopback_host(client_host) and _is_loopback_host(destination_host)
+
+
+def _has_debug_access(request: Request) -> bool:
+    if _is_local_request(request):
+        return True
+    return _has_admin_token(request.headers)
+
+
+def _has_admin_token(headers) -> bool:
+    expected = os.environ.get("LING_ADMIN_TOKEN", "").strip()
+    scheme, separator, supplied = headers.get("authorization", "").partition(" ")
+    return bool(
+        expected
+        and separator
+        and scheme.lower() == "bearer"
+        and hmac.compare_digest(supplied.strip(), expected)
+    )
+
+
+def _has_websocket_debug_access(ws: WebSocket) -> bool:
+    client_host = ws.client.host if ws.client else ""
+    if client_host == "testclient":
+        return True
+    has_proxy_headers = any(
+        ws.headers.get(header)
+        for header in ("forwarded", "x-forwarded-for", "x-real-ip")
+    )
+    destination_host = ws.url.hostname or ""
+    if (
+        not has_proxy_headers
+        and _is_loopback_host(client_host)
+        and _is_loopback_host(destination_host)
+    ):
+        return True
+    return _has_admin_token(ws.headers)
+
+
+def _is_protected_api(request: Request) -> bool:
+    path = request.url.path
+    return (
+        request.method == "DELETE"
+        or path in _PROTECTED_API_PATHS
+        or path.startswith(_PROTECTED_API_PREFIXES)
+    )
+
+
+@app.middleware("http")
+async def protect_private_apis(request: Request, call_next):
+    is_api = request.url.path.startswith("/api/")
+    if (
+        is_api
+        and request.method != "OPTIONS"
+        and _is_protected_api(request)
+        and not _has_debug_access(request)
+    ):
+        response = JSONResponse(
+            status_code=403,
+            content={"detail": "该接口仅允许本机访问或使用管理令牌"},
+        )
+    else:
+        try:
+            response = await call_next(request)
+        except Exception:
+            if not is_api:
+                raise
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "服务暂时不可用，请稍后重试"},
+            )
+    if is_api:
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
+
 CHILD_ID = db.CHILD_ID
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
 DESIGN = os.path.join(os.path.dirname(__file__), "..", "design")
+DEMO_MEDIA = os.path.join(os.path.dirname(__file__), "demo_media")
+GENERATED_MEDIA = str(jimeng_video.generated_media_root())
+os.makedirs(GENERATED_MEDIA, exist_ok=True)
 
 
 @app.on_event("startup")
 def startup():
     db.init_db()
+    media.default_catalog(reload=True)
+    experience_service = experience.default_service(reload=True)
     if not seed.is_seeded():
         seed.seed()
+    seed.ensure_experience_seeded()
+    experience_service.backfill_published_asset_snapshots()
+    media_worker.start_default(experience_service)
+    media_mode = jimeng_video.provider_mode_info()
     info = llm.mode_info()
     rt = realtime.info()
     live = ", ".join(
         f"{name}={'on' if config['available'] else 'off'}"
         for name, config in rt["providers"].items()
     )
-    print(f"[realtime] 实时语音：{live} · default={rt['default_provider']}\n"
-          f"[llm] 冷路径（记忆工人）：{info['worker_provider']} · {info['worker_model']}",
-          flush=True)
+    degraded = (
+        f" · degraded={media_mode['degraded_reason']}"
+        if media_mode["degraded"]
+        else ""
+    )
+    print(
+        f"[realtime] 实时语音：{live} · default={rt['default_provider']}\n"
+        f"[llm] 冷路径（记忆工人）：{info['worker_provider']} · {info['worker_model']}\n"
+        f"[media] 视频生成：{experience_service.provider.name}{degraded}",
+        flush=True,
+    )
+
+
+@app.on_event("shutdown")
+def shutdown():
+    media_worker.stop_default()
 
 
 # ---------------------------------------------------------------- 基本状态
@@ -140,7 +293,12 @@ def curriculum():
 def session_start():
     if not seed.is_seeded():
         raise HTTPException(400, "请先完成初始化")
-    return engine.start_session(CHILD_ID)
+    started = engine.start_session(CHILD_ID)
+    return {
+        "session_id": started["session_id"],
+        "opening": started["opening"],
+        "review_items": started["memory_pack"].get("review_items", []),
+    }
 
 
 class EndBody(BaseModel):
@@ -149,11 +307,14 @@ class EndBody(BaseModel):
 
 @app.post("/api/session/end")
 def session_end(body: EndBody):
-    s = engine.get_session(body.session_id)
-    if not s:
+    def finalize(session: dict) -> dict:
+        result = workers.process_session(session["db_id"])
+        moment = experience.default_service().settle_session(session, result)
+        return {**result, "moment": moment}
+
+    result = engine.close_session(body.session_id, finalize)
+    if result is None:
         raise HTTPException(404, "会话不存在")
-    result = workers.process_session(s["db_id"])
-    engine.SESSIONS.pop(body.session_id, None)
     return result
 
 
@@ -162,6 +323,9 @@ def session_end(body: EndBody):
 @app.websocket("/api/realtime/ws")
 async def realtime_ws(ws: WebSocket, session_id: str, provider: str | None = None):
     """浏览器与选定 WebSocket 实时模型之间的代理。"""
+    if not _has_websocket_debug_access(ws):
+        await ws.close(code=1008, reason="该接口仅允许本机访问或使用管理令牌")
+        return
     await realtime.bridge(ws, session_id, provider)
 
 
@@ -251,13 +415,6 @@ def facts():
     return rows
 
 
-@app.delete("/api/facts/{fact_id}")
-def delete_fact(fact_id: int):
-    """家长可见可删 —— 合规答卷的一部分。"""
-    db.execute("DELETE FROM facts WHERE id=? AND child_id=?", (fact_id, CHILD_ID))
-    return {"ok": True}
-
-
 @app.get("/api/growth")
 def growth():
     return memory.list_snapshots(CHILD_ID)
@@ -312,6 +469,76 @@ def _vocab_curve():
     return curve
 
 
+# ---------------------------------------------------------------- 体验投影（孩子端 / 家长端）
+
+class PocketBody(BaseModel):
+    collected: bool
+
+
+class DemoMomentBody(BaseModel):
+    event_key: str
+    event_value: str
+    source_id: str = "rehearsal"
+
+
+@app.get("/api/child/world/now")
+def child_world_now():
+    return experience.default_service().child_world_now(CHILD_ID)
+
+
+@app.get("/api/child/feed")
+def child_feed():
+    return experience.default_service().child_feed(CHILD_ID)
+
+
+@app.get("/api/moments/{moment_id}")
+def moment_detail(moment_id: int):
+    try:
+        return experience.default_service().refresh_moment(moment_id)
+    except experience.ExperienceNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/pocket")
+def pocket():
+    return experience.default_service().pocket(CHILD_ID)
+
+
+@app.put("/api/pocket/{keepsake_id}")
+def set_pocket(keepsake_id: int, body: PocketBody):
+    try:
+        return experience.default_service().set_pocket(
+            CHILD_ID, keepsake_id, body.collected
+        )
+    except experience.ExperienceNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/parent/today")
+def parent_today():
+    return experience.default_service().parent_today(CHILD_ID)
+
+
+@app.get("/api/parent/growth")
+def parent_growth(period: str = "week"):
+    return experience.default_service().parent_growth(CHILD_ID, period=period)
+
+
+@app.get("/api/parent/memory")
+def parent_memory(
+    cursor: str | None = None,
+    limit: int = Query(default=20, ge=1, le=50),
+):
+    return experience.default_service().parent_memory(
+        CHILD_ID, cursor=cursor, limit=limit
+    )
+
+
+@app.get("/api/parent/guardian")
+def parent_guardian():
+    return experience.default_service().parent_guardian(CHILD_ID)
+
+
 # ---------------------------------------------------------------- 玩偶的世界（线上分身）
 
 @app.get("/api/world")
@@ -348,6 +575,43 @@ def admin_reflect():
     return workers.reflect(CHILD_ID)
 
 
+@app.post("/api/admin/demo-moment")
+def admin_demo_moment(body: DemoMomentBody):
+    field = experience.EVENT_VALUE_FIELDS.get(body.event_key)
+    if not field:
+        raise HTTPException(400, "不支持的演示事件")
+    return experience.default_service().settle_candidate(
+        CHILD_ID,
+        "demo",
+        body.source_id,
+        body.event_key,
+        {field: body.event_value},
+    )
+
+
+@app.get("/api/admin/media/jobs")
+def admin_media_jobs(limit: int = Query(default=50, ge=1, le=200)):
+    service = experience.default_service()
+    worker = media_worker.default_worker()
+    mode = jimeng_video.provider_mode_info()
+    return {
+        "provider": service.provider.name,
+        "requested_provider": mode["requested_provider"],
+        "api_key_configured": mode["api_key_configured"],
+        "degraded": mode["degraded"],
+        "degraded_reason": mode["degraded_reason"],
+        "worker_running": bool(worker and worker.is_running),
+        "jobs": media_worker.job_summaries(limit),
+    }
+
+
+@app.post("/api/admin/media/tick")
+def admin_media_tick():
+    service = experience.default_service()
+    worker = media_worker.default_worker() or media_worker.MediaGenerationWorker(service)
+    return worker.run_once()
+
+
 @app.post("/api/admin/reseed")
 def admin_reseed():
     return seed.seed()
@@ -355,6 +619,15 @@ def admin_reseed():
 
 # ---------------------------------------------------------------- 前端
 
+
+app.mount("/demo-media", StaticFiles(directory=DEMO_MEDIA), name="demo-media")
+app.mount(
+    "/generated-media",
+    StaticFiles(directory=GENERATED_MEDIA),
+    name="generated-media",
+)
+app.mount("/child", StaticFiles(directory=os.path.join(FRONTEND, "child"), html=True), name="child-app")
+app.mount("/parent", StaticFiles(directory=os.path.join(FRONTEND, "parent"), html=True), name="parent-app")
 app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND, "assets")), name="assets")
 
 

@@ -1,14 +1,14 @@
 """玩偶的数字生命 + 教材复习闭环（冷路径）。
 
 - 夜间规划器 night_planner：从掌握度表挑 3-5 个到期项 → 今日议程 + 记忆钩子
-- 生活时钟 life_tick：每天推进故事弧一拍，结合正典与复习议程生成生活事件（不管孩子来没来）
+- 基础世界时钟 life_tick：只按统一时间槽投影公共事件，不读取孩子私有记忆
+- 私有成长时钟 advance_private_arc：仅由有意义互动显式触发
 - SRS-lite：曝光/识别/产出三层计分，听懂间隔翻倍、没反应间隔重置
 """
 import json
-import random
 from datetime import datetime, timedelta
 
-from . import db, llm, memory, prompts
+from . import db, llm, media, memory, prompts
 
 CHILD_ID = db.CHILD_ID
 
@@ -80,79 +80,120 @@ def due_items(child_id: int, limit: int = 5):
     )
 
 
-# ---------------------------------------------------------------- 生活时钟
+# ---------------------------------------------------------------- 世界与私有成长时钟
 
-def _mock_life_event(doll_card, canon_rows, arc, next_beat, review_words, child_topics):
-    """无 LLM 时的事件生成：故事拍模板 + 目标词场景化织入。"""
-    friends = [c["entity"] for c in canon_rows if "先生" in c["entity"] or "阿姨" in c["entity"] or "小姐" in c["entity"]]
-    friend = random.choice(friends) if friends else "松鼠先生"
-    weave = []
-    for w in review_words[:2]:
-        weave.append(f'{w["item_text"]}（就是{w["item_zh"]}呀）')
-    weave_txt = "、".join(weave) if weave else ""
-    beat_txt = next_beat or "村子里过了平静的一天"
-    mirror = f"我想起你最近老提到{child_topics[0]}，" if child_topics else ""
-    text = f"今天{friend}和我一起：{beat_txt}。{mirror}路上我们还遇到了 {weave_txt}！" if weave_txt \
-        else f"今天{friend}和我一起：{beat_txt}。"
-    question = f"你说，{beat_txt.split('，')[0]}之后，我们接下来该怎么办呀？"
+
+def life_tick(
+    child_id: int = CHILD_ID,
+    *,
+    now: datetime | None = None,
+    timezone: str = "Asia/Shanghai",
+) -> dict:
+    """兼容旧调试入口：预览统一作息事件，不读写孩子私有事实。"""
+    projection = media.default_catalog().select_world_event(
+        f"ling-{child_id}",
+        now or datetime.now().astimezone(),
+        timezone,
+    )
+    event = projection["event"]
     return {
-        "text": text,
-        "vocab": [w["item_text"] for w in review_words[:2]],
-        "interactive_question": question,
-        "new_canon": [],
+        "mode": projection["mode"],
+        "timezone": projection["timezone"],
+        "next_transition_at": projection["next_transition_at"],
+        "event_id": event["event_id"],
+        "event_version": event["event_version"],
+        "variant_id": event["variant_id"],
+        "text": event["summary"],
+        "media": event["media"],
     }
 
 
-def life_tick(child_id: int = CHILD_ID) -> dict:
-    """推进一拍，生成今天的生活事件。每天都跑，不管孩子来没来。"""
-    doll_card = memory.get_card(child_id, "doll")
-    canon_rows = db.q("SELECT * FROM doll_canon WHERE child_id=? ORDER BY id", (child_id,))
-    arc = db.q1("SELECT * FROM doll_arcs WHERE child_id=? AND status='active' ORDER BY id LIMIT 1", (child_id,))
-    beats = db.jloads(arc["beats_json"]) if arc else []
-    next_beat = beats[arc["current_beat"]] if arc and arc["current_beat"] < len(beats) else ""
-
-    review = due_items(child_id, 3)
-    review_words = [r for r in review if r["item_type"] == "word"]
-    diaries = memory.list_diary(child_id, 3)
-    child_topics = [t for d in diaries for t in d["topics"]][:2]
-
-    result = llm.worker_json(prompts.LIFE_TICK_PROMPT.format(
-        doll_name=doll_card.get("name", "灵灵"),
-        canon=json.dumps([f'{c["entity"]}：{c["fact_text"]}' for c in canon_rows], ensure_ascii=False),
-        arc_title=arc["title"] if arc else "平静的日常",
-        next_beat=next_beat or "（无，自由发挥一件小事）",
-        review_items=json.dumps([{"word": w["item_text"], "zh": w["item_zh"]} for w in review_words], ensure_ascii=False),
-        child_topics=json.dumps(child_topics, ensure_ascii=False),
-    )) if llm.worker_live() else None
-    if not isinstance(result, dict) or "text" not in result:
-        result = _mock_life_event(doll_card, canon_rows, arc, next_beat, review_words, child_topics)
-
-    event_id = db.execute(
-        "INSERT INTO doll_events(child_id,ts,text,arc_id,vocab_json,interactive_question) VALUES(?,?,?,?,?,?)",
-        (child_id, db.now(), result["text"], arc["id"] if arc else None,
-         json.dumps(result.get("vocab", []), ensure_ascii=False),
-         result.get("interactive_question", "")),
-    )
-    # 未分享事件最多攒 3 条，久的沉淀进档案，回来时不倒垃圾
-    stale = db.q(
-        "SELECT id FROM doll_events WHERE child_id=? AND share_status='unshared' ORDER BY ts DESC LIMIT -1 OFFSET 3",
-        (child_id,))
-    for s in stale:
-        db.execute("UPDATE doll_events SET share_status='archived' WHERE id=?", (s["id"],))
-
-    if arc:
-        new_beat = arc["current_beat"] + 1
+def advance_private_arc(child_id: int) -> dict | None:
+    """Advance one private story beat after a meaningful child interaction."""
+    with db.transaction(immediate=True) as conn:
+        row = conn.execute(
+            "SELECT * FROM doll_arcs WHERE child_id=? AND status='active' "
+            "ORDER BY id LIMIT 1",
+            (child_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        arc = dict(row)
+        beats = db.jloads(arc["beats_json"])
+        new_beat = min(arc["current_beat"] + 1, len(beats))
         status = "done" if new_beat >= len(beats) else "active"
-        db.execute("UPDATE doll_arcs SET current_beat=?, status=? WHERE id=?", (new_beat, status, arc["id"]))
-    for c in result.get("new_canon", []):
-        add_canon(child_id, c.get("entity", ""), c.get("fact_text", ""), by_child=False)
-    return {"event_id": event_id, **result}
+        conn.execute(
+            "UPDATE doll_arcs SET current_beat=?,status=? WHERE id=?",
+            (new_beat, status, arc["id"]),
+        )
+    return {"arc_id": arc["id"], "current_beat": new_beat, "status": status}
 
 
-def add_canon(child_id: int, entity: str, fact_text: str, by_child: bool) -> int:
+def commit_private_choice(
+    child_id: int,
+    *,
+    source_key: str,
+    event_id: int | None,
+    entity: str,
+    fact_text: str,
+    child_reaction: str,
+) -> dict:
+    """Atomically record one confirmed child choice and its private story advance."""
+    with db.transaction(immediate=True) as conn:
+        existing = conn.execute(
+            "SELECT id FROM doll_canon WHERE source_key=?", (source_key,)
+        ).fetchone()
+        if existing:
+            return {"created": False, "canon_id": existing["id"], "arc": None}
+
+        canon_id = conn.execute(
+            "INSERT INTO doll_canon("
+            "child_id,entity,fact_text,by_child,established_at,source_key"
+            ") VALUES(?,?,?,?,?,?)",
+            (child_id, entity, fact_text, 1, db.now(), source_key),
+        ).lastrowid
+        row = conn.execute(
+            "SELECT * FROM doll_arcs WHERE child_id=? AND status='active' "
+            "ORDER BY id LIMIT 1",
+            (child_id,),
+        ).fetchone()
+        arc_result = None
+        if row is not None:
+            arc = dict(row)
+            beats = db.jloads(arc["beats_json"])
+            new_beat = min(arc["current_beat"] + 1, len(beats))
+            status = "done" if new_beat >= len(beats) else "active"
+            conn.execute(
+                "UPDATE doll_arcs SET current_beat=?,status=? WHERE id=?",
+                (new_beat, status, arc["id"]),
+            )
+            arc_result = {
+                "arc_id": arc["id"],
+                "current_beat": new_beat,
+                "status": status,
+            }
+        if event_id is not None:
+            updated = conn.execute(
+                "UPDATE doll_events SET child_reaction=? WHERE id=? AND child_id=?",
+                (child_reaction, event_id, child_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("choice event not found")
+    return {"created": True, "canon_id": canon_id, "arc": arc_result}
+
+
+def add_canon(
+    child_id: int,
+    entity: str,
+    fact_text: str,
+    by_child: bool,
+    source_key: str | None = None,
+) -> int:
     return db.execute(
-        "INSERT INTO doll_canon(child_id,entity,fact_text,by_child,established_at) VALUES(?,?,?,?,?)",
-        (child_id, entity, fact_text, 1 if by_child else 0, db.now()),
+        "INSERT INTO doll_canon("
+        "child_id,entity,fact_text,by_child,established_at,source_key"
+        ") VALUES(?,?,?,?,?,?)",
+        (child_id, entity, fact_text, 1 if by_child else 0, db.now(), source_key),
     )
 
 

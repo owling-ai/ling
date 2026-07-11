@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 
 DB_PATH = os.environ.get("LING_DB", os.path.join(os.path.dirname(__file__), "..", "data", "ling.db"))
@@ -125,7 +126,8 @@ CREATE TABLE IF NOT EXISTS doll_canon (
     entity TEXT,                    -- 秋千 / 松鼠先生 / 橡树村 ...
     fact_text TEXT,
     by_child INTEGER DEFAULT 0,     -- 1 = 孩子的选择写进的正典
-    established_at TEXT
+    established_at TEXT,
+    source_key TEXT                 -- 一个孩子选择对应一个稳定来源键
 );
 
 CREATE TABLE IF NOT EXISTS doll_arcs (
@@ -166,7 +168,98 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at TEXT,
     transcript_json TEXT DEFAULT '[]',
     processed INTEGER DEFAULT 0,
+    processing INTEGER NOT NULL DEFAULT 0,
+    processing_started_at TEXT,
     cold_result_json TEXT DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS moments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    child_id INTEGER NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    event_value TEXT NOT NULL,
+    semantic_version INTEGER NOT NULL DEFAULT 1,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    local_date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    story TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('rendering', 'published', 'failed')),
+    published_asset_id TEXT,
+    published_asset_json TEXT,
+    error_code TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    published_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_moments_child_day_status
+    ON moments(child_id, local_date, status);
+CREATE INDEX IF NOT EXISTS idx_moments_child_created
+    ON moments(child_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS world_assignments (
+    child_id INTEGER NOT NULL,
+    doll_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event_version INTEGER NOT NULL,
+    variant_id TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    assigned_at TEXT NOT NULL,
+    PRIMARY KEY (child_id, event_id, event_version)
+);
+
+CREATE TABLE IF NOT EXISTS generation_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    moment_id INTEGER NOT NULL,
+    attempt INTEGER NOT NULL,
+    media_kind TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    asset_group TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'failed')),
+    asset_id TEXT,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    ready_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    error_code TEXT DEFAULT '',
+    external_task_id TEXT,
+    request_json TEXT NOT NULL DEFAULT '{}',
+    provider_response_json TEXT NOT NULL DEFAULT '{}',
+    next_poll_at TEXT,
+    provider_failures INTEGER NOT NULL DEFAULT 0,
+    media_path TEXT,
+    poster_path TEXT,
+    media_sha256 TEXT,
+    poster_sha256 TEXT,
+    width INTEGER,
+    height INTEGER,
+    duration_ms INTEGER,
+    completed_at TEXT,
+    UNIQUE(moment_id, attempt)
+);
+
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_moment_attempt
+    ON generation_jobs(moment_id, attempt DESC);
+
+CREATE TABLE IF NOT EXISTS keepsakes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    child_id INTEGER NOT NULL,
+    moment_id INTEGER NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    appearance TEXT NOT NULL,
+    image_url TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pocket_entries (
+    child_id INTEGER NOT NULL,
+    keepsake_id INTEGER NOT NULL,
+    collected INTEGER NOT NULL DEFAULT 0 CHECK(collected IN (0, 1)),
+    collected_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (child_id, keepsake_id)
 );
 """
 
@@ -174,6 +267,62 @@ CREATE TABLE IF NOT EXISTS sessions (
 def init_db():
     conn = get_conn()
     conn.executescript(SCHEMA)
+    session_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+    }
+    if "processing" not in session_columns:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN processing INTEGER NOT NULL DEFAULT 0"
+        )
+    if "processing_started_at" not in session_columns:
+        conn.execute("ALTER TABLE sessions ADD COLUMN processing_started_at TEXT")
+    moment_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(moments)").fetchall()
+    }
+    if "published_asset_json" not in moment_columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN published_asset_json TEXT")
+    generation_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(generation_jobs)").fetchall()
+    }
+    generation_migrations = {
+        "external_task_id": "TEXT",
+        "request_json": "TEXT NOT NULL DEFAULT '{}'",
+        "provider_response_json": "TEXT NOT NULL DEFAULT '{}'",
+        "next_poll_at": "TEXT",
+        "provider_failures": "INTEGER NOT NULL DEFAULT 0",
+        "media_path": "TEXT",
+        "poster_path": "TEXT",
+        "media_sha256": "TEXT",
+        "poster_sha256": "TEXT",
+        "width": "INTEGER",
+        "height": "INTEGER",
+        "duration_ms": "INTEGER",
+        "completed_at": "TEXT",
+    }
+    for name, declaration in generation_migrations.items():
+        if name not in generation_columns:
+            conn.execute(
+                f"ALTER TABLE generation_jobs ADD COLUMN {name} {declaration}"
+            )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_generation_jobs_provider_due "
+        "ON generation_jobs(provider, status, next_poll_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_jobs_external_task "
+        "ON generation_jobs(provider, external_task_id) "
+        "WHERE external_task_id IS NOT NULL"
+    )
+    canon_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(doll_canon)").fetchall()
+    }
+    if "source_key" not in canon_columns:
+        conn.execute("ALTER TABLE doll_canon ADD COLUMN source_key TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_doll_canon_source_key "
+        "ON doll_canon(source_key) WHERE source_key IS NOT NULL"
+    )
     conn.commit()
 
 
@@ -197,8 +346,28 @@ def q1(sql, params=()):
 def execute(sql, params=()):
     conn = get_conn()
     cur = conn.execute(sql, params)
-    conn.commit()
+    if not getattr(_local, "transaction_active", False):
+        conn.commit()
     return cur.lastrowid
+
+
+@contextmanager
+def transaction(immediate: bool = False):
+    """Run a small atomic unit without changing the existing auto-commit helpers."""
+    conn = get_conn()
+    if conn.in_transaction:
+        raise RuntimeError("nested database transactions are not supported")
+    conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+    _local.transaction_active = True
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
+    finally:
+        _local.transaction_active = False
 
 
 def jloads(s, default=None):
