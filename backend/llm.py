@@ -13,6 +13,7 @@
 3. mock      —— 规则抽取器（纯软件兜底，零依赖零网络，输出结构与 LLM 版一致）。
 """
 import json
+import math
 import os
 import re
 import sys
@@ -37,6 +38,9 @@ WORKER_EP = {
 ANTHROPIC_WORKER_MODEL = os.environ.get("LING_ANTHROPIC_WORKER_MODEL", "claude-haiku-4-5")
 _EMPTY_KEYS = {"", "EMPTY", "NONE", "NULL", "TODO", "CHANGEME", "PLACEHOLDER"}
 _TRUTHY = {"1", "true", "yes", "on"}
+_DEFAULT_WORKER_TIMEOUT_SECONDS = 60.0
+_MIN_WORKER_TIMEOUT_SECONDS = 1.0
+_MAX_WORKER_TIMEOUT_SECONDS = 120.0
 
 _anthropic_client = None
 
@@ -89,12 +93,19 @@ def _openai_ready(ep: dict) -> bool:
 
 
 def _worker_timeout_seconds() -> float:
-    raw = os.environ.get("LING_WORKER_TIMEOUT_SECONDS", "10")
+    raw = os.environ.get(
+        "LING_WORKER_TIMEOUT_SECONDS", str(_DEFAULT_WORKER_TIMEOUT_SECONDS)
+    )
     try:
         timeout = float(raw)
-    except ValueError:
-        timeout = 10.0
-    return max(1.0, min(timeout, 120.0))
+    except (TypeError, ValueError):
+        return _DEFAULT_WORKER_TIMEOUT_SECONDS
+    if not math.isfinite(timeout):
+        return _DEFAULT_WORKER_TIMEOUT_SECONDS
+    return max(
+        _MIN_WORKER_TIMEOUT_SECONDS,
+        min(timeout, _MAX_WORKER_TIMEOUT_SECONDS),
+    )
 
 
 def provider() -> str:
@@ -129,9 +140,17 @@ def mode_info() -> dict:
 
 # ---------------------------------------------------------------- OpenAI 兼容端点
 
+def _is_timeout_error(error: Exception) -> bool:
+    return isinstance(error, TimeoutError) or isinstance(
+        getattr(error, "reason", None), TimeoutError
+    )
+
+
 def _log_fail(ep: dict, e: Exception):
     if isinstance(e, urllib.error.HTTPError):
         detail = f"返回 {e.code}：{e.read()[:300].decode(errors='replace')}"
+    elif _is_timeout_error(e):
+        detail = f"请求超时（等待 {_worker_timeout_seconds():g} 秒）"
     else:
         detail = f"请求失败（{type(e).__name__}: {e}）"
     print(f"[llm] {ep['base']} · {ep['model']} {detail} —— 本轮降级到规则抽取器",
