@@ -10,6 +10,7 @@ import {
   isPocketMutationCurrent,
   momentView,
   reconcileFeed,
+  shouldShowWelcome,
   worldRefreshDelay,
   worldView,
 } from "../model.mjs";
@@ -29,7 +30,12 @@ test("day mode keeps the server world event in the block-toy theme", () => {
   const view = worldView({
     mode: "day",
     doll: { name: "灵灵", known_days: 12 },
-    event: { title: "去山坡等风", summary: "灵灵带着积木风筝去等风。", media },
+    event: {
+      title: "去山坡等风",
+      summary: "灵灵带着积木风筝去等风。",
+      timeline: [{ at: "08:30", text: "风筝线绕好了" }],
+      media,
+    },
     memory_summary: { moments: 8, keepsakes: 3 },
   });
 
@@ -38,6 +44,14 @@ test("day mode keeps the server world event in the block-toy theme", () => {
   assert.equal(view.dollName, "灵灵");
   assert.equal(view.knownDays, 12);
   assert.deepEqual(view.media, media);
+  assert.deepEqual(view.timeline, [{ at: "08:30", text: "风筝线绕好了" }]);
+});
+
+test("welcome appears once by default and supports deterministic demo overrides", () => {
+  assert.equal(shouldShowWelcome("", false), true);
+  assert.equal(shouldShowWelcome("", true), false);
+  assert.equal(shouldShowWelcome("?welcome=1", true), true);
+  assert.equal(shouldShowWelcome("?welcome=0", false), false);
 });
 
 test("night mode is selected by server state rather than color preference", () => {

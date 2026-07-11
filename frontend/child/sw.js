@@ -1,5 +1,5 @@
 const CACHE_PREFIX = "ling-child-shell";
-const CACHE_NAME = `${CACHE_PREFIX}-v5`;
+const CACHE_NAME = `${CACHE_PREFIX}-v7`;
 const SHELL = [
   "/child/",
   "/child/index.html",
@@ -15,7 +15,11 @@ const SHELL = [
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    await cache.addAll(SHELL);
+    const freshShell = SHELL.map((asset) => new Request(
+      new URL(asset, self.location.origin),
+      { cache: "reload" },
+    ));
+    await cache.addAll(freshShell);
     await self.skipWaiting();
   })());
 });

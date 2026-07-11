@@ -9,15 +9,18 @@ import {
   pendingCardChanged,
   reconcileFeed,
   safeMediaUrl,
+  shouldShowWelcome,
   worldRefreshDelay,
   worldView,
 } from "./model.mjs";
 
 const view = document.querySelector("#view");
 const announcer = document.querySelector("#announcer");
-const modeChip = document.querySelector("#mode-chip");
+const navigation = document.querySelector(".tab-bar");
+const toast = document.querySelector("#toast");
 const themeMeta = document.querySelector('meta[name="theme-color"]');
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const WELCOME_KEY = "ling-child-welcome-v1";
 
 const state = {
   world: null,
@@ -30,6 +33,9 @@ const state = {
   pollControllers: new Map(),
   routeVersion: 0,
   worldRefreshTimer: null,
+  showingWelcome: false,
+  soundEnabled: false,
+  toastTimer: null,
 };
 
 function escapeHtml(value) {
@@ -55,6 +61,8 @@ function routeInfo() {
 
 function updateNavigation(route) {
   const activeTab = route.name === "moment" ? "adventures" : route.name;
+  document.body.dataset.route = route.name;
+  navigation.hidden = route.name === "moment";
   document.querySelectorAll("[data-tab]").forEach((link) => {
     if (link.dataset.tab === activeTab) link.setAttribute("aria-current", "page");
     else link.removeAttribute("aria-current");
@@ -62,7 +70,7 @@ function updateNavigation(route) {
 }
 
 function focusHeading() {
-  window.requestAnimationFrame(() => view.querySelector("h1")?.focus());
+  window.requestAnimationFrame(() => view.querySelector("h1")?.focus({ preventScroll: true }));
 }
 
 function commit(markup, title, { focus = true } = {}) {
@@ -74,9 +82,8 @@ function commit(markup, title, { focus = true } = {}) {
 function renderLoading(label = "正在打开灵灵的窗口") {
   view.innerHTML = `
     <section class="loading-view" aria-label="${escapeHtml(label)}" aria-busy="true">
-      <div class="skeleton skeleton-media"></div>
-      <div class="skeleton skeleton-line wide"></div>
-      <div class="skeleton skeleton-line"></div>
+      <div class="loading-blocks" aria-hidden="true"><i></i><i></i><i></i></div>
+      <p>${escapeHtml(label)}</p>
     </section>`;
 }
 
@@ -93,9 +100,68 @@ function applyWorld(world) {
   state.world = world;
   const model = worldView(world);
   document.body.dataset.worldMode = model.mode;
-  modeChip.textContent = model.modeLabel;
   themeMeta.content = model.theme === "day" ? "#F2F2EF" : "#171822";
   return model;
+}
+
+function welcomeWasSeen() {
+  try {
+    return window.localStorage.getItem(WELCOME_KEY) === "seen";
+  } catch {
+    return false;
+  }
+}
+
+function rememberWelcome() {
+  try {
+    window.localStorage.setItem(WELCOME_KEY, "seen");
+  } catch {
+    // The welcome still works when storage is unavailable for privacy reasons.
+  }
+}
+
+function showToast(message) {
+  if (state.toastTimer !== null) window.clearTimeout(state.toastTimer);
+  toast.textContent = message;
+  toast.hidden = false;
+  state.toastTimer = window.setTimeout(() => {
+    toast.hidden = true;
+    toast.textContent = "";
+    state.toastTimer = null;
+  }, 2600);
+}
+
+function renderWelcome() {
+  state.showingWelcome = true;
+  navigation.hidden = true;
+  document.body.dataset.route = "welcome";
+  document.body.dataset.worldMode = "day";
+  themeMeta.content = "#F2F2EF";
+  commit(`
+    <section class="welcome-view" aria-labelledby="welcome-title">
+      <div class="welcome-copy">
+        <h1 id="welcome-title" tabindex="-1">你好，我是灵灵</h1>
+        <p>一起看看我的世界</p>
+      </div>
+
+      <div class="hatch-scene" role="img" aria-label="积木蛋轻轻打开，灵灵从里面探出头">
+        <span class="egg-piece egg-piece-blue" aria-hidden="true"></span>
+        <span class="egg-piece egg-piece-clay" aria-hidden="true"></span>
+        <span class="egg-piece egg-piece-pea" aria-hidden="true"></span>
+        <span class="egg-piece egg-piece-amber" aria-hidden="true"></span>
+        <span class="egg-piece egg-piece-cream" aria-hidden="true"></span>
+        <span class="hatch-glow" aria-hidden="true"></span>
+        <span class="lingling-figure" aria-hidden="true">
+          <i class="lingling-ear left"></i><i class="lingling-ear right"></i>
+          <i class="lingling-eye left"></i><i class="lingling-eye right"></i>
+          <i class="lingling-cheek"></i><i class="lingling-light"></i>
+        </span>
+      </div>
+
+      <button class="welcome-button" type="button" data-action="enter-world">
+        <span>一起看看</span><span aria-hidden="true">→</span>
+      </button>
+    </section>`, "欢迎", { focus: false });
 }
 
 function mediaMarkup(media, { className = "media-frame", autoplay = false } = {}) {
@@ -125,43 +191,57 @@ function mediaMarkup(media, { className = "media-frame", autoplay = false } = {}
     </div>`;
 }
 
+function worldMediaMarkup(media) {
+  if (!media) return `<div class="quiet-scene" role="img" aria-label="灵灵的世界已经安静入睡"><span class="night-light" aria-hidden="true"></span></div>`;
+
+  const src = escapeHtml(safeMediaUrl(media.src, window.location.origin));
+  const poster = escapeHtml(safeMediaUrl(media.poster, window.location.origin));
+  const alt = escapeHtml(media.alt || "灵灵此刻的世界");
+  if (!src) return `<div class="world-media-fallback">灵灵正在把今天的风收好</div>`;
+
+  if (media.kind === "video") {
+    return `<video class="world-video" data-world-video playsinline muted loop
+      ${reduceMotion.matches ? "" : "autoplay"} preload="metadata"
+      ${poster ? `poster="${poster}"` : ""} aria-label="${alt}">
+      <source src="${src}" type="${escapeHtml(media.mime_type || "video/mp4")}">
+    </video>`;
+  }
+
+  return `<img class="world-video" src="${src}" alt="${alt}"
+    width="${Number(media.width) || 720}" height="${Number(media.height) || 1280}">`;
+}
+
 function renderNow(world) {
   const model = applyWorld(world);
-  const scene = model.media
-    ? mediaMarkup(model.media, { autoplay: true })
-    : `<div class="quiet-scene" role="img" aria-label="灵灵的世界已经安静入睡"><span>晚安，明早见</span></div>`;
+  state.soundEnabled = false;
+  const timeline = model.timeline.length
+    ? `<ol class="world-timeline">${model.timeline.slice(-4).reverse().map((entry, index) => `
+        <li${index ? ' class="past"' : ""}>
+          ${entry.at ? `<time>${escapeHtml(entry.at)}</time>` : ""}
+          ${entry.text ? `<span>${escapeHtml(entry.text)}</span>` : ""}
+        </li>`).join("")}</ol>`
+    : `<p class="world-summary">${escapeHtml(model.summary)}</p>`;
 
   commit(`
-    <section aria-labelledby="now-title">
-      <div class="world-scene">
-        <div class="world-media">
-          ${scene}
-          ${model.isSleeping ? "" : `
-            <div class="scene-status"><span class="live-dot" aria-hidden="true"></span>此刻，灵灵在身边</div>`}
-        </div>
-        <div class="scene-copy">
-          <h1 id="now-title" tabindex="-1">${escapeHtml(model.headline)}</h1>
-          <p>${escapeHtml(model.summary)}</p>
-        </div>
-      </div>
-
-      <div class="now-sheet">
-        <aside class="whisper-card" aria-label="回到实体玩偶的提醒">
-          <span class="whisper-light" aria-hidden="true"></span>
-          <span>
-            <b>${model.isSleeping ? "灵灵已经睡着了" : model.theme === "night" ? "睡前悄悄话攒好了" : "灵灵有话想当面说"}</b>
-            <span>${model.isSleeping ? "明早再来看看它" : model.theme === "night" ? "摸摸它，说完就睡哦" : "回家摸摸它，就能听到"}</span>
-          </span>
-        </aside>
-
-        <div class="memory-grid" aria-label="一起留下的回忆">
-          <div class="memory-card">
-            <b>${model.knownDays || "新"}</b>
-            <span>${model.knownDays ? `认识第 ${model.knownDays} 天` : "刚刚认识"}</span>
+    <section class="now-view" aria-labelledby="now-title">
+      <div class="world-stage">
+        <div class="world-media-layer">${worldMediaMarkup(model.media)}</div>
+        <div class="world-overlay">
+          <div class="scene-copy">
+            <div class="scene-status">${model.isSleeping ? "晚安" : "此刻"}</div>
+            <h1 id="now-title" tabindex="-1">${escapeHtml(model.headline)}</h1>
+            ${timeline}
           </div>
-          <div class="memory-card">
-            <b>${model.moments}</b>
-            <span>一起攒下的瞬间</span>
+
+          <div class="now-actions">
+            ${model.media?.kind === "video" ? `
+              <button class="sound-button" type="button" data-action="toggle-sound"
+                aria-label="打开世界声音" aria-pressed="false">
+                <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 9.5v5h3.5L13 18V6L8.5 9.5Z"/><path class="sound-wave" d="M16 9c1.8 1.8 1.8 4.2 0 6M18.5 6.5c3.2 3.2 3.2 7.8 0 11"/></svg>
+              </button>` : `<span></span>`}
+            ${model.isSleeping ? `
+              <span class="sleep-note">${escapeHtml(model.summary)}</span>` : `
+              <button class="meet-button" type="button" data-action="meet-ling">去找灵灵</button>`}
           </div>
         </div>
       </div>
@@ -225,8 +305,9 @@ function renderFeed(feed, { focus = true } = {}) {
   commit(`
     <section aria-labelledby="feed-title">
       <header class="view-header">
-        <h1 id="feed-title" tabindex="-1">灵灵的奇遇</h1>
-        <p>${knownDays ? `认识第 ${knownDays} 天` : "共同经历会慢慢长成故事"}</p>
+        <span class="section-eyebrow">我们走过的地方</span>
+        <h1 id="feed-title" tabindex="-1">奇遇</h1>
+        <p>${knownDays ? `你和灵灵认识的第 ${knownDays} 天` : "共同经历会慢慢长成故事"}</p>
       </header>
       ${feed.pending.length ? `<div class="pending-list" aria-live="polite">${feed.pending.map(pendingCard).join("")}</div>` : ""}
       ${published}
@@ -262,13 +343,14 @@ function renderPocket(items, { focus = true } = {}) {
           ${momentId ? `<a href="#moment/${encodeURIComponent(momentId)}" aria-label="${escapeHtml(item.name || "信物")}，打开来源瞬间">${body}</a>` : `<div class="keepsake-static">${body}</div>`}
         </article>`;
     }).join("")}</div>`
-    : `<div class="empty-state"><h2>口袋还是空的</h2><p>只有你和灵灵共同经历的特别故事，才会留下信物。</p></div>`;
+    : `<div class="empty-state"><h2>口袋还是空的</h2><p>等你和灵灵一起遇到一件值得留下的事。</p></div>`;
 
   commit(`
     <section aria-labelledby="pocket-title">
       <header class="view-header">
-        <h1 id="pocket-title" tabindex="-1">我的口袋</h1>
-        <p>从共同经历里留下的信物</p>
+        <span class="section-eyebrow">每一件都有来历</span>
+        <h1 id="pocket-title" tabindex="-1">口袋</h1>
+        <p>从共同经历里留下的小东西</p>
       </header>
       ${content}
     </section>`, "口袋", { focus });
@@ -320,16 +402,16 @@ function renderDetail(moment, { focus = true } = {}) {
 
   commit(`
     <article class="detail-view" aria-labelledby="detail-title">
-      <a class="back-link" href="#adventures">返回奇遇</a>
-      ${mediaMarkup(item.media)}
-      <div class="detail-meta">${escapeHtml(formatDate(item.occurred_at))}${item.with_label ? `，${escapeHtml(item.with_label)}` : ""}</div>
+      <a class="back-link" href="#adventures"><span aria-hidden="true">←</span> 奇遇</a>
+      <div class="detail-meta">${item.kind === "personal" ? "我们一起" : "灵灵的现在"} · ${escapeHtml(formatDate(item.occurred_at))}</div>
       <h1 id="detail-title" class="detail-title" tabindex="-1">${escapeHtml(item.title)}</h1>
+      ${mediaMarkup(item.media)}
       <p class="detail-story">${escapeHtml(item.story || item.summary || "这段共同经历已经被灵灵好好收下了。")}</p>
       ${keepsake ? `
         <section class="detail-keepsake" data-appearance="${appearance(keepsake.appearance)}" aria-label="这段经历留下的信物">
           ${keepsakeVisual(keepsake)}
           <span>
-            <b>收获：${escapeHtml(keepsake.name || "一件信物")}</b>
+            <b>${escapeHtml(keepsake.name || "一件信物")}</b>
             <span>${escapeHtml(keepsake.description || "一段共同经历留下的纪念")}</span>
           </span>
         </section>
@@ -442,6 +524,7 @@ async function loadWorld(signal, version) {
 }
 
 async function route() {
+  state.showingWelcome = false;
   const current = routeInfo();
   const pendingPocketMutation = current.name === "pocket"
     ? state.pocketMutation?.completion
@@ -495,6 +578,26 @@ async function route() {
     if (error.name === "AbortError" || version !== state.routeVersion) return;
     renderError("暂时打不开这里", error.message || "请稍后再试一次。");
   }
+}
+
+function enterWorld() {
+  rememberWelcome();
+  state.showingWelcome = false;
+  navigation.hidden = false;
+  route();
+}
+
+function toggleWorldSound(button) {
+  const video = view.querySelector("[data-world-video]");
+  if (!video) return;
+
+  state.soundEnabled = video.muted;
+  video.muted = !state.soundEnabled;
+  button.setAttribute("aria-pressed", String(state.soundEnabled));
+  button.setAttribute("aria-label", state.soundEnabled ? "关闭世界声音" : "打开世界声音");
+  button.classList.toggle("is-on", state.soundEnabled);
+  if (state.soundEnabled) video.play().catch(() => {});
+  announce(state.soundEnabled ? "世界声音已打开。" : "世界声音已关闭。");
 }
 
 async function togglePocket() {
@@ -567,6 +670,13 @@ view.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]");
   if (!action) return;
 
+  if (action.dataset.action === "enter-world") enterWorld();
+  if (action.dataset.action === "toggle-sound") toggleWorldSound(action);
+  if (action.dataset.action === "meet-ling") {
+    const message = "灵灵在等你回到它身边。";
+    showToast(message);
+    announce(message);
+  }
   if (action.dataset.action === "retry-route") route();
   if (action.dataset.action === "retry-poll") {
     const pending = state.feed?.pending.find((item) => item.id === action.dataset.id);
@@ -592,6 +702,13 @@ view.addEventListener("error", (event) => {
   const target = event.target.tagName === "SOURCE" ? event.target.parentElement : event.target;
   if (!(target instanceof HTMLMediaElement) && !(target instanceof HTMLImageElement)) return;
 
+  const worldLayer = target.closest(".world-media-layer");
+  if (worldLayer) {
+    worldLayer.innerHTML = '<div class="world-media-fallback">灵灵正在把今天的风收好</div>';
+    announce("这段世界画面暂时无法播放。");
+    return;
+  }
+
   const frame = target.closest(".media-frame, .moment-media");
   if (frame) {
     frame.innerHTML = '<div class="media-fallback">这段画面暂时无法播放。</div>';
@@ -608,15 +725,21 @@ view.addEventListener("error", (event) => {
   }
 }, true);
 
-window.addEventListener("hashchange", route);
+window.addEventListener("hashchange", () => {
+  if (!state.showingWelcome) route();
+});
 window.addEventListener("pagehide", () => {
   clearWorldRefresh();
   stopPollers();
+  if (state.toastTimer !== null) window.clearTimeout(state.toastTimer);
 });
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js", { scope: "/child/" }).catch(() => {});
 }
 
-if (!window.location.hash) window.history.replaceState(null, "", "#now");
-route();
+if (!window.location.hash) {
+  window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#now`);
+}
+if (shouldShowWelcome(window.location.search, welcomeWasSeen())) renderWelcome();
+else route();

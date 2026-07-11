@@ -17,32 +17,33 @@
   <link rel="apple-touch-icon" href="./icon-192.png">
   <link rel="stylesheet" href="./styles.css">
 </head>
-<body data-world-mode="day">
+<body data-world-mode="day" data-route="booting">
   <div class="app-shell">
-    <header class="app-header">
-      <a class="wordmark" href="#now" aria-label="灵灵的窗口，返回现在">
-        <span class="wordmark-mark" aria-hidden="true">灵</span>
-        <span>灵灵的窗口</span>
-      </a>
-      <span id="mode-chip" class="mode-chip">积木日间</span>
-    </header>
-
     <main id="view" tabindex="-1">
       <section class="loading-view" aria-label="正在打开灵灵的窗口" aria-busy="true">
-        <div class="skeleton skeleton-media"></div>
-        <div class="skeleton skeleton-line wide"></div>
-        <div class="skeleton skeleton-line"></div>
+        <div class="loading-blocks" aria-hidden="true"><i></i><i></i><i></i></div>
+        <p>正在打开灵灵的窗口</p>
       </section>
     </main>
 
-    <nav class="tab-bar" aria-label="儿童端主导航">
-      <a href="#now" data-tab="now">现在</a>
-      <a href="#adventures" data-tab="adventures">奇遇</a>
-      <a href="#pocket" data-tab="pocket">口袋</a>
+    <nav class="tab-bar" aria-label="儿童端主导航" hidden>
+      <a href="#now" data-tab="now">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 10.7 12 4l8 6.7v8.1a1.2 1.2 0 0 1-1.2 1.2H5.2A1.2 1.2 0 0 1 4 18.8Z"/><path d="M9 20v-6h6v6"/></svg>
+        <span>现在</span>
+      </a>
+      <a href="#adventures" data-tab="adventures">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 1.6 5.1L19 10l-5.4 1.9L12 17l-1.6-5.1L5 10l5.4-1.9Z"/><path d="m18.5 15 .7 2.3 2.3.7-2.3.8-.7 2.2-.8-2.2-2.2-.8 2.2-.7Z"/></svg>
+        <span>奇遇</span>
+      </a>
+      <a href="#pocket" data-tab="pocket">
+        <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 7.5h14v11.3A1.2 1.2 0 0 1 17.8 20H6.2A1.2 1.2 0 0 1 5 18.8Z"/><path d="M8 7.5V5.2A1.2 1.2 0 0 1 9.2 4h5.6A1.2 1.2 0 0 1 16 5.2v2.3M8.5 12h7"/></svg>
+        <span>口袋</span>
+      </a>
     </nav>
   </div>
 
   <div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="./app.mjs"></script>
 </body>
 </html>

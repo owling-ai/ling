@@ -65,6 +65,9 @@ test("service worker activation only removes obsolete parent shell caches", asyn
       "ling-parent-shell-v2",
       "ling-parent-shell-v3",
       "ling-parent-shell-v4",
+      "ling-parent-shell-v5",
+      "ling-parent-shell-v6",
+      "ling-parent-shell-v7",
       "ling-child-shell-v3",
       "runtime-images",
     ],
@@ -79,6 +82,9 @@ test("service worker activation only removes obsolete parent shell caches", asyn
     "ling-parent-shell-v1",
     "ling-parent-shell-v2",
     "ling-parent-shell-v3",
+    "ling-parent-shell-v4",
+    "ling-parent-shell-v5",
+    "ling-parent-shell-v6",
   ]);
   assert.equal(state.claims, 1);
 });
@@ -99,8 +105,11 @@ test("service worker precaches the core shell atomically and rejects a failed in
   listeners.get("install")({ waitUntil: (promise) => { installation = promise; } });
 
   await assert.rejects(installation, /precache failed/);
-  assert.ok(addAllAssets.includes("/parent/index.html"));
-  assert.ok(addAllAssets.includes("/parent/app.mjs"));
+  assert.ok(addAllAssets.every((request) => request instanceof Request));
+  assert.ok(addAllAssets.every((request) => request.cache === "reload"));
+  const paths = addAllAssets.map((request) => new URL(request.url).pathname);
+  assert.ok(paths.includes("/parent/index.html"));
+  assert.ok(paths.includes("/parent/app.mjs"));
   assert.equal(state.skipWaitingCalls, 0);
 });
 
@@ -155,14 +164,22 @@ test("tabs expose an explicit roving focus path and standard navigation keys", a
   }
   assert.match(app, /event\.preventDefault\(\)/);
   assert.match(app, /activateTab\(PARENT_TABS\[nextIndex\], \{ focus: true \}\)/);
+  assert.match(app, /window\.scrollTo\(\{ top: 0, left: 0, behavior: "auto" \}\)/);
 });
 
-test("today renderer keeps the mood disclaimer visible in an empty state", async () => {
+test("today renderer uses source activity fields and never invents closure or advice", async () => {
   const app = await read("app.mjs");
 
-  assert.match(app, /function moodSection\(mood\)/);
-  assert.match(app, /mood\.summary \|\| "今天还没有足够信息形成心情速览。"/);
-  assert.match(app, /content\.push\(moodSection\(model\.mood\)\)/);
+  assert.match(app, /"今天很安稳"/);
+  assert.match(app, /"今天还很安静"/);
+  assert.match(app, /"今晚可以聊什么"/);
+  assert.match(app, /function safeConversationSuggestion\(model\)/);
+  assert.match(app, /return displayableConversationSuggestion\(model\)/);
+  assert.match(app, /const hasActivity = model\.hasActivity === true/);
+  assert.match(app, /"今天没有新的建议"/);
+  assert.doesNotMatch(app, /metric\.display\.startsWith/);
+  assert.doesNotMatch(app, /已结束|风筝画成什么颜色/);
+  assert.doesNotMatch(app, /function metricGrid/);
 });
 
 test("memory renderer shows controlled child choices and keepsakes instead of raw text", async () => {
@@ -173,6 +190,11 @@ test("memory renderer shows controlled child choices and keepsakes instead of ra
   assert.match(app, /item\.keepsake/);
   assert.doesNotMatch(app, /childMessage/);
   assert.doesNotMatch(app, /rawConversation/);
+  assert.match(app, /model\.items\.map\(renderMemoryItem\)/);
+  assert.doesNotMatch(app, /model\.items\.slice/);
+  assert.match(app, /model\.nextCursor/);
+  assert.match(app, /data-load-more-memory/);
+  assert.match(app, /api\.load\("memory", \{ signal: controller\.signal, cursor \}\)/);
 });
 
 test("12px timeline timestamps meet normal-text contrast", async () => {
@@ -220,8 +242,10 @@ test("PWA install metadata is mobile first and names the parent manual consisten
   ]);
   const manifest = JSON.parse(manifestText);
 
-  assert.match(html, /name="apple-mobile-web-app-title" content="训练师手册"/);
-  assert.match(html, /name="application-name" content="训练师手册"/);
+  assert.match(html, /name="apple-mobile-web-app-title" content="成长手册"/);
+  assert.match(html, /name="application-name" content="成长手册"/);
+  assert.equal(manifest.name, "灵 Ling · 成长手册");
+  assert.equal(manifest.short_name, "成长手册");
   assert.match(html, /name="theme-color" media="\(prefers-color-scheme: light\)"/);
   assert.match(html, /name="theme-color" media="\(prefers-color-scheme: dark\)"/);
   assert.deepEqual(manifest.display_override, ["standalone", "minimal-ui"]);
@@ -234,9 +258,39 @@ test("visual system keeps the block-and-night-light direction explicit", async (
   assert.match(styles, /--block-shadow:/);
   assert.match(styles, /--lamp-glow:/);
   assert.match(styles, /body::before/);
-  assert.match(styles, /\.brand-mark::after/);
+  assert.match(styles, /\.night-lamp/);
+  assert.match(styles, /\.today-scene/);
+  assert.match(styles, /\.night-mode \.app-shell/);
   assert.match(styles, /\.tab-list button\[aria-selected="true"\]::before/);
   assert.match(styles, /touch-action:\s*manipulation/);
+});
+
+test("welcome flow appears once and has deterministic replay controls", async () => {
+  const [html, app] = await Promise.all([read("index.html"), read("app.mjs")]);
+
+  assert.match(html, /id="welcome-view"/);
+  assert.match(html, /id="start-app"/);
+  assert.match(html, /一起守护这段成长/);
+  assert.match(app, /const WELCOME_KEY = "ling-parent-welcome-v1"/);
+  assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\("welcome"\)/);
+  assert.match(app, /storageSet\(WELCOME_KEY, "complete"\)/);
+  assert.match(app, /data-show-welcome/);
+});
+
+test("growth and guardian render product language rather than monitoring dashboards", async () => {
+  const app = await read("app.mjs");
+
+  assert.match(app, /text: "以前"/);
+  assert.match(app, /text: "现在"/);
+  assert.match(app, /"最近的变化"/);
+  assert.match(app, /"红线话题"/);
+  assert.match(app, /"AI 身份"/);
+  assert.match(app, /"账户注销与彻底销毁"/);
+  assert.match(app, /model\.growthMoments\.find\(\(story\) => story\.before && story\.after\)/);
+  assert.match(app, /"还没有新的变化"/);
+  assert.match(app, /model\.notifications\.map\(\(notification\) => staticRow/);
+  assert.doesNotMatch(app, /睡觉要开灯|恐龙小夜灯|来自最近一次睡前相处/);
+  assert.doesNotMatch(app, /训练师|风险等级|表现评分/);
 });
 
 test("PWA manifest does not force a device orientation", async () => {

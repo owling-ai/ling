@@ -3,50 +3,95 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f1e8">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#161b28">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2f2ef">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#171822">
   <meta name="color-scheme" content="light">
-  <meta name="application-name" content="训练师手册">
+  <meta name="application-name" content="成长手册">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="训练师手册">
+  <meta name="apple-mobile-web-app-title" content="成长手册">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="format-detection" content="telephone=no">
-  <meta name="description" content="灵 Ling 家长端训练师手册">
-  <meta property="og:title" content="训练师手册 | 灵 Ling">
-  <meta property="og:description" content="只看成长摘要和共同信物，不展示孩子原始对话。">
-  <title>训练师手册 | 灵 Ling</title>
+  <meta name="description" content="灵 Ling 家长端成长手册">
+  <meta property="og:title" content="成长手册 | 灵 Ling">
+  <meta property="og:description" content="理解成长、接住对话、预先设定守护边界。">
+  <title>成长手册 | 灵 Ling</title>
   <link rel="manifest" href="/parent/manifest.webmanifest">
+  <link rel="icon" href="/parent/icon-192.png" type="image/png">
   <link rel="apple-touch-icon" href="/parent/icon-192.png">
   <link rel="stylesheet" href="/parent/styles.css">
 </head>
 <body>
   <a class="skip-link" href="#app-main">跳到主要内容</a>
-  <div class="app-shell">
-    <header class="app-header">
-      <div class="brand-row">
-        <div class="brand-mark" aria-hidden="true">灵</div>
-        <div>
-          <p class="brand-name">LING FAMILY</p>
-          <p class="brand-subtitle">共同成长的玩偶</p>
+
+  <section id="welcome-view" class="welcome-view" aria-labelledby="welcome-title" hidden>
+    <div class="welcome-content">
+      <div class="welcome-copy">
+        <p class="eyebrow">LING FAMILY</p>
+        <h1 id="welcome-title">一起守护这段成长</h1>
+        <p>先安排好边界，再把相处留给孩子和灵灵</p>
+      </div>
+
+      <div class="block-scene" aria-hidden="true">
+        <div class="block-house">
+          <span class="house-roof"></span>
+          <span class="house-body"></span>
+          <span class="house-door"></span>
+        </div>
+        <span class="toy-block block-green"></span>
+        <span class="toy-block block-blue"></span>
+        <span class="toy-block block-pink"></span>
+        <span class="toy-cone"></span>
+        <div class="night-lamp">
+          <span class="lamp-moon"></span>
+          <span class="lamp-base"></span>
         </div>
       </div>
-      <h1>训练师手册</h1>
-      <p class="header-summary">同一份记忆，换一副专业眼镜。共养，不监控。</p>
-    </header>
 
-    <nav class="tab-bar" aria-label="家长工作视图">
-      <div class="tab-list" role="tablist" aria-label="训练师手册" aria-orientation="horizontal">
-        <button id="tab-today" type="button" role="tab" aria-selected="true" aria-controls="panel-today" data-tab="today" tabindex="0">今日</button>
-        <button id="tab-growth" type="button" role="tab" aria-selected="false" aria-controls="panel-growth" data-tab="growth" tabindex="-1">成长</button>
-        <button id="tab-memory" type="button" role="tab" aria-selected="false" aria-controls="panel-memory" data-tab="memory" tabindex="-1">记忆</button>
-        <button id="tab-guardian" type="button" role="tab" aria-selected="false" aria-controls="panel-guardian" data-tab="guardian" tabindex="-1">守护</button>
+      <div class="welcome-actions">
+        <div class="setup-list" aria-label="监护设置摘要">
+          <div class="setup-row">
+            <span class="setup-icon guardian-icon" aria-hidden="true"></span>
+            <span>监护人身份</span>
+            <strong>已确认</strong>
+          </div>
+          <div class="setup-row">
+            <span class="setup-icon child-icon" aria-hidden="true">悠</span>
+            <span>孩子称呼</span>
+            <strong>悠悠</strong>
+          </div>
+        </div>
+        <button id="start-app" class="primary-button" type="button">进入成长手册</button>
+        <p class="welcome-footnote">这些设置只帮助灵灵守住边界，不会打断孩子正在发生的相处。</p>
+      </div>
+    </div>
+  </section>
+
+  <div id="app-shell" class="app-shell" hidden>
+    <nav class="tab-bar" aria-label="成长手册主要页面">
+      <div class="tab-list" role="tablist" aria-label="成长手册" aria-orientation="horizontal">
+        <button id="tab-today" type="button" role="tab" aria-selected="true" aria-controls="panel-today" data-tab="today" tabindex="0">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.66 6.34l1.41-1.41"></path></svg>
+          <span>今日</span>
+        </button>
+        <button id="tab-growth" type="button" role="tab" aria-selected="false" aria-controls="panel-growth" data-tab="growth" tabindex="-1">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 4.7 18 2 18 2c1 5-1 10-5.2 12.4"></path><path d="M2 21c0-3 1.85-5.36 5.08-6.94C9.6 12.82 12.5 11.5 16 8"></path></svg>
+          <span>成长</span>
+        </button>
+        <button id="tab-memory" type="button" role="tab" aria-selected="false" aria-controls="panel-memory" data-tab="memory" tabindex="-1">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2H9a3 3 0 0 1 3 3v17a3 3 0 0 0-3-3H2z"></path><path d="M22 4.5A2.5 2.5 0 0 0 19.5 2H15a3 3 0 0 0-3 3v17a3 3 0 0 1 3-3h7z"></path></svg>
+          <span>记忆</span>
+        </button>
+        <button id="tab-guardian" type="button" role="tab" aria-selected="false" aria-controls="panel-guardian" data-tab="guardian" tabindex="-1">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3z"></path><path d="m9 12 2 2 4-4"></path></svg>
+          <span>守护</span>
+        </button>
       </div>
     </nav>
 
     <main id="app-main" tabindex="-1">
       <section id="panel-today" class="view-panel" role="tabpanel" aria-labelledby="tab-today" tabindex="0">
-        <div class="initial-state" aria-live="polite">正在准备今日速览</div>
+        <div class="initial-state" aria-live="polite">正在准备今天的成长手册</div>
       </section>
       <section id="panel-growth" class="view-panel" role="tabpanel" aria-labelledby="tab-growth" tabindex="0" hidden>
         <div class="initial-state" aria-live="polite">切换到成长时加载</div>
@@ -60,9 +105,12 @@
     </main>
   </div>
 
-  <dialog id="rights-dialog" aria-labelledby="rights-title" aria-describedby="rights-body rights-notice">
+  <dialog id="rights-dialog" class="app-dialog" aria-labelledby="rights-title" aria-describedby="rights-body rights-notice">
     <div class="dialog-heading">
-      <h2 id="rights-title">数据权利说明</h2>
+      <div>
+        <p class="dialog-kicker">数据权利</p>
+        <h2 id="rights-title">数据权利说明</h2>
+      </div>
       <form method="dialog">
         <button class="icon-button" type="submit" value="close" aria-label="关闭数据权利说明" title="关闭">×</button>
       </form>
@@ -70,17 +118,34 @@
     <p id="rights-body"></p>
     <p id="rights-notice" class="dialog-notice"></p>
     <div class="rights-scope" aria-label="数据权利范围">
-      <div><b>全量导出</b><span>通过独立流程提供孩子账户相关数据。</span></div>
-      <div><b>账户注销</b><span>进入待删除状态后停止召回与生成，再执行销毁。</span></div>
-      <div><b>普通记忆</b><span>不提供挑着删来改写共同经历的功能。</span></div>
+      <div><b>导出共同经历</b><span>通过独立流程提供孩子账户相关数据。</span></div>
+      <div><b>账户注销</b><span>停止召回和生成后，再彻底销毁私有数据。</span></div>
+      <div><b>普通记忆</b><span>不提供挑着删除来改写共同经历的功能。</span></div>
     </div>
     <form method="dialog" class="dialog-actions">
       <button class="primary-button" type="submit" value="close">我知道了</button>
     </form>
   </dialog>
 
+  <dialog id="boundary-dialog" class="app-dialog" aria-labelledby="boundary-title">
+    <div class="dialog-heading">
+      <div>
+        <p class="dialog-kicker">关系边界</p>
+        <h2 id="boundary-title">红线话题</h2>
+      </div>
+      <form method="dialog">
+        <button class="icon-button" type="submit" value="close" aria-label="关闭红线话题说明" title="关闭">×</button>
+      </form>
+    </div>
+    <p>红线只让灵灵以后不主动提起，不会删除或改写已经发生的共同经历。</p>
+    <div id="boundary-list" class="boundary-dialog-list"></div>
+    <form method="dialog" class="dialog-actions">
+      <button class="primary-button" type="submit" value="close">明白了</button>
+    </form>
+  </dialog>
+
   <p id="status-announcer" class="sr-only" aria-live="polite"></p>
-  <noscript>请启用 JavaScript 查看家长端投影。</noscript>
+  <noscript>请启用 JavaScript 查看家长端成长手册。</noscript>
   <script type="module" src="/parent/app.mjs"></script>
 </body>
 </html>

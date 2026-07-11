@@ -12,14 +12,13 @@
 ./run.sh
 ```
 
-`run.sh` 默认使用 `LING_PROVIDER=mock`，即使本机 `.env` 里有真实 worker key，黑客松演示的会话结束与生成链路也不会被外部模型调用拖住；需要验证真实冷路径时再显式 `LING_PROVIDER=openai ./run.sh` 或 `LING_PROVIDER=anthropic ./run.sh`。
+`run.sh` 不强制指定冷路径 provider：配置了 `LING_WORKER_BASE_URL`、`LING_WORKER_API_KEY` 和 `LING_WORKER_MODEL` 时自动使用 OpenAI 兼容端点（包括 DeepSeek）；否则尝试 Anthropic，均不可用时才回退到规则抽取器。需要完全离线彩排时可显式运行 `LING_PROVIDER=mock ./run.sh`。
 
 打开这些入口：
 
 - `http://localhost:8888/`：旧网页玩偶/调试控制台，保留实时语音和记忆调试能力。
 - `http://localhost:8888/child/`：儿童端「灵灵的窗口」，手机优先 PWA，展示全局基础世界、孩子私有瞬间和信物口袋。
-- `http://localhost:8888/parent/`：家长端「训练师手册」，手机优先 PWA，只读取受控家长投影。
-- `http://localhost:8888/design`：积木 + 夜灯的配色与组件参考；其中旧版卡片式页面结构已被产品文档中的全屏世界线规范取代。
+- `http://localhost:8888/parent/`：家长端「成长手册」，手机优先 PWA，只读取受控家长投影。
 
 黑客松现场不依赖 Seedance/Veo。默认用 `MockMediaProvider` 模拟“提交生成 -> 渲染中 -> 发布”的状态机，实际展示读取 `backend/demo_media/` 下预生成的本地 MP4/PNG。后端也已提供可选的即梦 / 火山方舟 Seedance 2.0 异步 provider，用于离线准备素材或加分演示；配置、轮询、下载和发布契约见 [视频生成链路](./docs/media-generation.md)。彩排时可触发一个专属瞬间：
 
@@ -31,7 +30,7 @@ curl -X POST http://localhost:8888/api/admin/demo-moment \
 
 随后儿童端 feed 会先出现 `rendering`，约 2-4 秒后 `/api/moments/{id}` 发布本地视频与信物；收藏状态通过 `/api/pocket/{keepsake_id}` 持久化。
 
-服务默认只监听 `127.0.0.1`。管理接口和旧调试控制台的原始记忆接口只允许本机访问；显式改为对外监听时，需设置 `LING_ADMIN_TOKEN` 并通过 `Authorization: Bearer <token>` 访问这些接口。儿童端和家长端只使用受控投影，不需要管理令牌。
+黑客松阶段，`run.sh` 默认监听 `0.0.0.0:8888` 并设置 `LING_ALLOW_UNAUTHENTICATED=1`：公网、局域网、HTTP API 和实时 WebSocket 都直接放行，方便实体硬件联调。需要恢复访问保护时，设置 `LING_ALLOW_UNAUTHENTICATED=0`，并通过 `LING_ADMIN_TOKEN` 与 `Authorization: Bearer <token>` 访问管理、会话/实时和旧调试接口；只需本机访问时再加 `LING_HOST=127.0.0.1`。
 
 常用验证命令：
 
@@ -52,7 +51,7 @@ node --test frontend/parent/tests/*.test.mjs
 |---|---|
 | 实体玩偶 / 网页模拟器 | 主要互动与记忆写入入口，负责实时语音、视觉理解和孩子选择 |
 | 孩子端「灵灵的窗口」 | `现在 / 奇遇 / 口袋`：看灵灵此刻的生活、共同生成的专属瞬间与收藏信物 |
-| 家长端「训练师手册」 | `今日 / 成长 / 记忆 / 守护`：只读取家长可见的受控投影，不展示原始转写和内部生成数据 |
+| 家长端「成长手册」 | `今日 / 成长 / 记忆 / 守护`：只读取家长可见的受控投影，不展示原始转写和内部生成数据 |
 
 当前视觉方向已经确定为 **白天积木 + 睡前夜灯**：白天强调可触摸、可行动的积木玩具感；夜间转为靛蓝与少量暖金，像床头小夜灯。昼夜不是前端换肤，而是由后端的统一作息和时间槽决定，所有孩子看到语义一致的基础世界。
 
@@ -64,7 +63,7 @@ node --test frontend/parent/tests/*.test.mjs
 
 目前正在推进的是黑客松 Demo 的最后收敛：继续打磨双端移动体验和离线彩排流程，扩充少量高质量预生成素材，并保持媒体生成 provider 接口可替换。现场演示始终以本地 Mock 状态机和预生成素材为主，不让真实视频 API 的耗时、费用或网络状态影响演示。
 
-产品体验与三端职责见 [《Ling · 产品设计总览》](./Ling-%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md)：[灵灵端](./Ling-%E7%81%B5%E7%81%B5%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)、[儿童端](./Ling-%E5%84%BF%E7%AB%A5%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)、[家长端](./Ling-%E5%AE%B6%E9%95%BF%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)。完整数据与记忆决策见 [《Ling · 记忆架构：事实源、体验投影与数字生命》](./Ling-%E8%AE%B0%E5%BF%86%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1.md)，实现拆解见 [黑客松双端实施计划](./docs/superpowers/plans/2026-07-11-hackathon-mobile-apps.md)。
+产品体验与三端职责见 [《Ling · 产品设计总览》](./Ling-%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md)：[灵灵端](./Ling-%E7%81%B5%E7%81%B5%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)、[儿童端](./Ling-%E5%84%BF%E7%AB%A5%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)、[家长端](./Ling-%E5%AE%B6%E9%95%BF%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)。完整数据与记忆决策见 [《Ling · 记忆架构：事实源、体验投影与数字生命》](./Ling-%E8%AE%B0%E5%BF%86%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1.md)。
 
 ## 快速开始（uv 管理环境）
 
