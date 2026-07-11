@@ -51,5 +51,24 @@ export function createParentApi(fetchImplementation = globalThis.fetch?.bind(glo
       assertProjectionSafe(data);
       return data;
     },
+    async bindParent(qrToken, installationId, { signal } = {}) {
+      let response;
+      try {
+        response = await fetchImplementation("/api/bindings/parent-scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ qr_token: qrToken, installation_id: installationId }),
+          signal,
+        });
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        throw new Error("暂时无法连接灵灵，请检查网络后重试。");
+      }
+      const data = await responseJson(response);
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || "暂时没有绑定成功，请再试一次。");
+      }
+      return data;
+    },
   };
 }

@@ -170,7 +170,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     processed INTEGER DEFAULT 0,
     processing INTEGER NOT NULL DEFAULT 0,
     processing_started_at TEXT,
-    cold_result_json TEXT DEFAULT '{}'
+    cold_result_json TEXT DEFAULT '{}',
+    session_key TEXT,
+    pack_json TEXT DEFAULT '{}',
+    state_json TEXT DEFAULT '{}',
+    gemini_resumption_handle TEXT,
+    gemini_resumption_updated_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS moments (
@@ -261,6 +266,29 @@ CREATE TABLE IF NOT EXISTS pocket_entries (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (child_id, keepsake_id)
 );
+
+CREATE TABLE IF NOT EXISTS binding_qr_codes (
+    token_hash TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS app_bindings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    qr_token_hash TEXT NOT NULL UNIQUE,
+    child_id INTEGER NOT NULL,
+    child_installation_id TEXT NOT NULL UNIQUE,
+    parent_installation_id TEXT UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('pending', 'active')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    activated_at TEXT,
+    FOREIGN KEY (qr_token_hash) REFERENCES binding_qr_codes(token_hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_bindings_parent_installation
+    ON app_bindings(parent_installation_id);
 """
 
 
@@ -276,6 +304,20 @@ def init_db():
         )
     if "processing_started_at" not in session_columns:
         conn.execute("ALTER TABLE sessions ADD COLUMN processing_started_at TEXT")
+    session_migrations = {
+        "session_key": "TEXT",
+        "pack_json": "TEXT DEFAULT '{}'",
+        "state_json": "TEXT DEFAULT '{}'",
+        "gemini_resumption_handle": "TEXT",
+        "gemini_resumption_updated_at": "TEXT",
+    }
+    for name, declaration in session_migrations.items():
+        if name not in session_columns:
+            conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} {declaration}")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_key "
+        "ON sessions(session_key) WHERE session_key IS NOT NULL"
+    )
     moment_columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(moments)").fetchall()
     }

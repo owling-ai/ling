@@ -285,6 +285,16 @@ table.mastery td { padding: 7px 8px; border-bottom: 1px dashed var(--line); font
 
 /* ---------------- 演示控制台 ---------------- */
 .demo-btns { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+.binding-demo-layout { display: grid; grid-template-columns: 232px minmax(0, 1fr); align-items: center; gap: 24px; }
+.binding-demo-layout img { width: 232px; height: 232px; border: 1px solid var(--line); border-radius: 8px; }
+.binding-demo-copy { min-width: 0; }
+.binding-demo-copy > b { display: block; margin-bottom: 6px; font-size: 18px; letter-spacing: 0; }
+.binding-demo-copy > p { margin-bottom: 16px; color: var(--ink-2); line-height: 1.6; }
+.binding-demo-copy pre.json { min-height: 48px; margin: 0; }
+@media (max-width: 720px) {
+  .binding-demo-layout { grid-template-columns: 1fr; }
+  .binding-demo-layout img { margin: 0 auto; }
+}
 pre.json {
   background: #2e2a26; color: #f4e9d8; border-radius: 14px; padding: 16px 18px;
   font-size: 12.5px; overflow-x: auto; line-height: 1.55; max-height: 320px; overflow-y: auto;

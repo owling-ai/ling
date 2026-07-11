@@ -15,10 +15,20 @@ import {
 } from "./model.mjs";
 
 const WELCOME_KEY = "ling-parent-welcome-v1";
+const BINDING_KEY = "ling-parent-binding-v1";
+const INSTALLATION_KEY = "ling-parent-installation-v1";
 const api = createParentApi();
 const appShell = document.querySelector("#app-shell");
 const welcomeView = document.querySelector("#welcome-view");
 const startButton = document.querySelector("#start-app");
+const bindingPanel = document.querySelector("#parent-binding");
+const bindingSuccess = document.querySelector("#binding-success");
+const bindingStatus = document.querySelector("#binding-status");
+const bindingScanButton = document.querySelector("#scan-binding-code");
+const bindingCodeForm = document.querySelector("#binding-code-form");
+const bindingCodeInput = document.querySelector("#binding-code");
+const bindingCamera = document.querySelector("#binding-camera");
+const bindingVideo = document.querySelector("#binding-video");
 const tabButtons = new Map(
   [...document.querySelectorAll('[role="tab"][data-tab]')].map((button) => [button.dataset.tab, button]),
 );
@@ -47,6 +57,9 @@ let latestRedLines = [];
 let memoryPageLoading = false;
 let memoryPageError = "";
 const controllers = new Map();
+let bindingStream = null;
+let bindingScanFrame = null;
+let bindingSubmitting = false;
 
 function element(tag, { className = "", text = "", attributes = {} } = {}, children = []) {
   const node = document.createElement(tag);
@@ -550,17 +563,48 @@ function storageSet(key, value) {
   }
 }
 
+function storageRemove(key) {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // The binding flow still works for the current page without persistent storage.
+  }
+}
+
+function resetBindingFromQuery() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("binding") !== "reset") return;
+  storageRemove(BINDING_KEY);
+  storageRemove(WELCOME_KEY);
+  url.searchParams.delete("binding");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+}
+
+function installationId() {
+  const existing = storageGet(INSTALLATION_KEY);
+  if (existing) return existing;
+  const created = globalThis.crypto?.randomUUID?.()
+    || `parent-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  storageSet(INSTALLATION_KEY, created);
+  return created;
+}
+
+function hasBinding() {
+  return storageGet(BINDING_KEY) === "active";
+}
+
 function shouldShowWelcome() {
   const forced = new URLSearchParams(window.location.search).get("welcome");
   if (forced === "1") return true;
-  if (forced === "0") return false;
-  return storageGet(WELCOME_KEY) !== "complete";
+  if (forced === "0" && hasBinding()) return false;
+  return !hasBinding() || storageGet(WELCOME_KEY) !== "complete";
 }
 
 function showWelcome() {
   appShell.hidden = true;
   welcomeView.hidden = false;
   document.body.classList.remove("night-mode");
+  if (hasBinding()) showBindingSuccess();
 }
 
 function showApp() {
@@ -570,6 +614,7 @@ function showApp() {
 }
 
 function completeWelcome() {
+  if (!hasBinding()) return;
   storageSet(WELCOME_KEY, "complete");
   const url = new URL(window.location.href);
   url.searchParams.delete("welcome");
@@ -577,6 +622,107 @@ function completeWelcome() {
   showApp();
   document.querySelector("#app-main").focus({ preventScroll: true });
   announce("欢迎设置已完成，已进入成长手册");
+}
+
+function stopBindingCamera() {
+  if (bindingScanFrame !== null) cancelAnimationFrame(bindingScanFrame);
+  bindingScanFrame = null;
+  bindingStream?.getTracks().forEach((track) => track.stop());
+  bindingStream = null;
+  bindingVideo.srcObject = null;
+  bindingCamera.hidden = true;
+}
+
+function showBindingSuccess() {
+  stopBindingCamera();
+  bindingPanel.hidden = true;
+  bindingSuccess.hidden = false;
+  startButton.hidden = false;
+  bindingStatus.textContent = "已和悠悠绑定";
+}
+
+function setBindingBusy(busy) {
+  bindingSubmitting = busy;
+  bindingScanButton.disabled = busy;
+  bindingCodeInput.disabled = busy;
+  bindingCodeForm.querySelector("button").disabled = busy;
+}
+
+async function submitBindingCode(qrToken) {
+  const normalized = String(qrToken || "").trim();
+  if (!normalized || bindingSubmitting) return;
+  setBindingBusy(true);
+  bindingStatus.textContent = "正在确认孩子端";
+  try {
+    const result = await api.bindParent(normalized, installationId());
+    if (result.status !== "active") throw new Error("孩子端还没有准备好，请先让孩子扫码。");
+    storageSet(BINDING_KEY, "active");
+    showBindingSuccess();
+    announce("已和悠悠绑定");
+  } catch (error) {
+    stopBindingCamera();
+    bindingStatus.textContent = error instanceof Error ? error.message : "暂时没有绑定成功，请再试一次。";
+    bindingScanButton.hidden = false;
+  } finally {
+    setBindingBusy(false);
+  }
+}
+
+async function startBindingCamera() {
+  const hasNativeDetector = "BarcodeDetector" in window;
+  const hasFallbackDetector = typeof globalThis.jsQR === "function";
+  if ((!hasNativeDetector && !hasFallbackDetector) || !navigator.mediaDevices?.getUserMedia) {
+    bindingStatus.textContent = "当前浏览器无法打开扫码器，请输入 Demo 码。";
+    bindingCodeInput.focus();
+    return;
+  }
+  stopBindingCamera();
+  try {
+    bindingStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } },
+      audio: false,
+    });
+    bindingVideo.srcObject = bindingStream;
+    bindingCamera.hidden = false;
+    bindingScanButton.hidden = true;
+    bindingStatus.textContent = "将二维码放入取景框";
+    await bindingVideo.play();
+    const detector = hasNativeDetector ? new BarcodeDetector({ formats: ["qr_code"] }) : null;
+    const canvas = detector ? null : document.createElement("canvas");
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
+    const detect = async () => {
+      if (!bindingStream || bindingSubmitting) return;
+      try {
+        let rawValue = "";
+        if (detector) {
+          const codes = await detector.detect(bindingVideo);
+          rawValue = codes[0]?.rawValue || "";
+        } else if (context && bindingVideo.videoWidth > 0) {
+          const scale = Math.min(1, 640 / bindingVideo.videoWidth);
+          canvas.width = Math.max(1, Math.round(bindingVideo.videoWidth * scale));
+          canvas.height = Math.max(1, Math.round(bindingVideo.videoHeight * scale));
+          context.drawImage(bindingVideo, 0, 0, canvas.width, canvas.height);
+          const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+          rawValue = globalThis.jsQR(pixels.data, pixels.width, pixels.height, {
+            inversionAttempts: "dontInvert",
+          })?.data || "";
+        }
+        if (rawValue) {
+          await submitBindingCode(rawValue);
+          return;
+        }
+      } catch {
+        bindingStatus.textContent = "没有识别到二维码，请再对准一次。";
+      }
+      bindingScanFrame = requestAnimationFrame(detect);
+    };
+    bindingScanFrame = requestAnimationFrame(detect);
+  } catch {
+    stopBindingCamera();
+    bindingStatus.textContent = "没有打开相机，请输入 Demo 码。";
+    bindingScanButton.hidden = false;
+    bindingCodeInput.focus();
+  }
 }
 
 function openDialog(dialog, trigger) {
@@ -637,6 +783,11 @@ document.querySelector("#app-main").addEventListener("click", (event) => {
 });
 
 startButton.addEventListener("click", completeWelcome);
+bindingScanButton.addEventListener("click", startBindingCamera);
+bindingCodeForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  submitBindingCode(bindingCodeInput.value);
+});
 rightsDialog.addEventListener("close", restoreDialogFocus);
 boundaryDialog.addEventListener("close", restoreDialogFocus);
 
@@ -646,7 +797,11 @@ window.addEventListener("hashchange", () => {
     activateTab(requested, { updateHash: false });
   }
 });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopBindingCamera();
+});
 
+resetBindingFromQuery();
 const requestedTab = window.location.hash.slice(1);
 activateTab(PARENT_TABS.includes(requestedTab) ? requestedTab : "today");
 if (shouldShowWelcome()) showWelcome();

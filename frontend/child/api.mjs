@@ -26,6 +26,16 @@ export function createChildApi(fetchImpl = globalThis.fetch?.bind(globalThis)) {
   }
 
   return Object.freeze({
+    childScan: (qrToken, installationId, options = {}) => request("/api/bindings/child-scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ qr_token: qrToken, installation_id: installationId }),
+      signal: options.signal,
+    }),
+    bindingStatus: (installationId, options = {}) => request(
+      `/api/bindings/status?installation_id=${encodeURIComponent(installationId)}`,
+      { signal: options.signal },
+    ),
     world: (options = {}) => request("/api/child/world/now", { signal: options.signal }),
     feed: (options = {}) => request("/api/child/feed", { signal: options.signal }),
     moment: (id, options = {}) => request(`/api/moments/${encodeURIComponent(id)}`, { signal: options.signal }),

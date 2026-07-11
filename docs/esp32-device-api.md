@@ -24,7 +24,9 @@ POST /api/session/end
 - 火山方案依赖浏览器 ByteRTC SDK，裸 ESP32 不能复用。
 - 固定 `CHILD_ID=1`，没有设备鉴权或绑定。
 - `/api/session/end` 同步运行冷路径，可能耗时。
-- 实时会话主要保存在进程内，重启后不可恢复。
+- 业务 session、转写和 Gemini resumption handle 已持久化；设备复用同一 `session_id` 重连时，后端优先恢复 Gemini 会话，token 失效则回放已完成的文本历史。实时 WebSocket 本身仍需重新建立。
+- Gemini 上游短暂失败时后端发送 `ling.error` 并保持设备 WebSocket，按退避重试；设备仍应在长时间无恢复时自行重新建链。
+- 下行 `response.audio.delta` 会控制在单帧 64 KiB 以内，过大的 Gemini 音频块由后端分片。
 
 P0 仅用于验证 I2S、采集、播放和网络链路。没有可靠 AEC 时使用按键说话或半双工，不宣称全双工打断。
 
@@ -98,7 +100,7 @@ Offset  Size  Field
 
 - 连续 10 分钟无 I2S underrun、队列增长或明显堆内存下降。
 - 打断能停止尾音；记录端到端延迟。
-- Wi-Fi 短断后恢复同一业务会话，不重复欢迎和冷路径。
+- Wi-Fi 短断后恢复同一业务会话，不重复欢迎和冷路径；后端重启后复用 `session_id` 仍能恢复上下文。
 - 拥塞时图片先丢，音频连续。
 - 日志不含模型 key、设备 secret、家庭信息、完整转写或记忆数据。
 

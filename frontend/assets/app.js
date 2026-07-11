@@ -1171,11 +1171,28 @@ VIEWS.setup = async () => {
 // ---------------------------------------------------------------- 演示控制台
 
 VIEWS.demo = async () => {
+  const bindingCode = STATE.binding_demo?.short_code || "LING-DEMO-2026";
   $("#view").innerHTML = `
   <h1 class="page-title">演示控制台</h1>
   <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。
     交互内核：${STATE.realtime?.available ? "📞 Gemini / StepFun / 火山 RTC" : "😴 实时模型未配置"}
     · 记忆工人：${esc(STATE.llm.worker_model)}</p>
+  <div class="card binding-demo-card">
+    <h2>🔗 两端扫码绑定 <span class="hint">孩子端先扫，家长端后扫</span></h2>
+    <div class="binding-demo-layout">
+      <img src="/api/demo/binding-qr.png" alt="灵灵 Demo 绑定二维码" width="232" height="232">
+      <div class="binding-demo-copy">
+        <b>${esc(bindingCode)}</b>
+        <p>用两台手机分别打开孩子端和成长手册，扫描左侧同一个二维码。</p>
+        <div class="demo-btns">
+          <a class="btn" href="/child/?binding=reset" target="_blank" rel="noopener">打开孩子端</a>
+          <a class="btn" href="/parent/?binding=reset" target="_blank" rel="noopener">打开家长端</a>
+          <button id="reset-binding-demo">重置绑定</button>
+        </div>
+        <pre class="json" id="binding-demo-out">等待孩子端扫码</pre>
+      </div>
+    </div>
+  </div>
   <div class="card">
     <h2>🌙 冷路径任务</h2>
     <div class="demo-btns">
@@ -1206,6 +1223,19 @@ VIEWS.demo = async () => {
       <div class="step"><b>两层世界</b>同一套记忆 API：玩偶端 / 线上分身 / 家长控制台</div>
     </div>
   </div>`;
+  $("#reset-binding-demo").onclick = async () => {
+    const button = $("#reset-binding-demo");
+    button.disabled = true;
+    try {
+      const out = await api.post("/admin/reset-binding");
+      $("#binding-demo-out").textContent = out.message;
+      toast("绑定状态已重置");
+    } catch (error) {
+      $("#binding-demo-out").textContent = error.message;
+    } finally {
+      button.disabled = false;
+    }
+  };
   document.querySelectorAll("[data-act]").forEach(b => b.onclick = async () => {
     b.disabled = true;
     const out = await api.post(`/admin/${b.dataset.act}`);

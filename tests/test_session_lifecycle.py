@@ -55,6 +55,29 @@ def test_close_session_keeps_minimal_tombstone_and_reuses_result(
     assert isinstance(engine._session_lock(session_id), type(threading.RLock()))
 
 
+def test_active_session_rehydrates_history_state_and_gemini_handle(
+    session_id: str,
+) -> None:
+    engine.record_voice_user(session_id, "我喜欢恐龙")
+    engine.record_voice_doll(session_id, "我也记住啦")
+    assert engine.claim_opening(session_id) is True
+    assert engine.update_gemini_resumption_handle(session_id, "handle-1") is True
+
+    engine.SESSIONS.clear()
+
+    restored = engine.get_session(session_id)
+    assert restored is not None
+    assert restored["session_id"] == session_id
+    assert restored["history"] == [
+        {"role": "user", "content": "我喜欢恐龙"},
+        {"role": "assistant", "content": "我也记住啦"},
+    ]
+    assert restored["opening_sent"] is True
+    assert restored["gemini_resumption_handle"] == "handle-1"
+    assert engine.get_session_history(session_id) == restored["history"]
+    assert engine.claim_opening(session_id) is False
+
+
 def test_closed_session_rejects_late_transcript_and_idle_writes(
     session_id: str,
 ) -> None:

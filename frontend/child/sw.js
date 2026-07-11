@@ -1,15 +1,17 @@
 const CACHE_PREFIX = "ling-child-shell";
-const CACHE_NAME = `${CACHE_PREFIX}-v7`;
+const CACHE_NAME = `${CACHE_PREFIX}-v8`;
 const SHELL = [
   "/child/",
   "/child/index.html",
   "/child/styles.css",
   "/child/app.mjs",
   "/child/api.mjs",
+  "/child/scanner.mjs",
   "/child/model.mjs",
   "/child/manifest.webmanifest",
   "/child/icon-192.png",
   "/child/icon-512.png",
+  "/assets/jsQR.js",
 ];
 
 self.addEventListener("install", (event) => {
@@ -43,7 +45,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/demo-media/")) return;
   if (url.origin !== self.location.origin) return;
-  if (!url.pathname.startsWith("/child/")) return;
+  if (!url.pathname.startsWith("/child/") && url.pathname !== "/assets/jsQR.js") return;
 
   event.respondWith((async () => {
     const cached = await caches.match(request);

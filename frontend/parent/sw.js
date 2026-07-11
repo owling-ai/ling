@@ -1,4 +1,4 @@
-const CACHE_NAME = "ling-parent-shell-v7";
+const CACHE_NAME = "ling-parent-shell-v8";
 const SHELL = [
   "/parent/",
   "/parent/index.html",
@@ -9,6 +9,7 @@ const SHELL = [
   "/parent/manifest.webmanifest",
   "/parent/icon-192.png",
   "/parent/icon-512.png",
+  "/assets/jsQR.js",
 ];
 
 self.addEventListener("install", (event) => {

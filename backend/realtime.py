@@ -43,6 +43,31 @@ GEMINI_TRANSCRIPTION_LANGUAGES = [
     ).split(",")
     if code.strip()
 ]
+GEMINI_USE_PROXY = os.environ.get("LING_GEMINI_USE_PROXY", "true").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+GEMINI_SETUP_TIMEOUT_SECONDS = max(
+    5, float(os.environ.get("LING_GEMINI_SETUP_TIMEOUT_SECONDS", "20"))
+)
+GEMINI_RECONNECT_INITIAL_DELAY_SECONDS = max(
+    0.25, float(os.environ.get("LING_GEMINI_RECONNECT_INITIAL_DELAY_SECONDS", "1"))
+)
+GEMINI_RECONNECT_MAX_DELAY_SECONDS = max(
+    GEMINI_RECONNECT_INITIAL_DELAY_SECONDS,
+    float(os.environ.get("LING_GEMINI_RECONNECT_MAX_DELAY_SECONDS", "8")),
+)
+GEMINI_CLIENT_QUEUE_SIZE = max(
+    16, int(os.environ.get("LING_GEMINI_CLIENT_QUEUE_SIZE", "256"))
+)
+GEMINI_MAX_AUDIO_CHARS = max(
+    4096, int(os.environ.get("LING_GEMINI_MAX_AUDIO_CHARS", "64000"))
+)
+GEMINI_MAX_CLIENT_FRAME_BYTES = max(
+    4096, int(os.environ.get("LING_REALTIME_MAX_CLIENT_FRAME_BYTES", "65536"))
+)
 
 MINICPM_BASE_URL = os.environ.get("LING_MINICPM_BASE_URL", "").strip()
 MINICPM_REALTIME_URL = os.environ.get("LING_MINICPM_REALTIME_URL", "").strip()
@@ -619,78 +644,203 @@ async def _bridge_stepfun(client, session_id: str, pack: dict):
     await _run_pumps(client, upstream, pump_up, pump_down)
 
 
-def _gemini_setup(pack: dict) -> dict:
+def _gemini_setup(
+    pack: dict,
+    *,
+    resumption_handle: str | None = None,
+    initial_history: bool = False,
+) -> dict:
     model = GEMINI_MODEL if GEMINI_MODEL.startswith("models/") else f"models/{GEMINI_MODEL}"
     transcription = _gemini_transcription_config(pack)
-    return {
-        "setup": {
-            "model": model,
-            "generationConfig": {
-                "responseModalities": ["AUDIO"],
-                "speechConfig": {
-                    "voiceConfig": {
-                        "prebuiltVoiceConfig": {"voiceName": GEMINI_VOICE}
-                    }
-                },
-            },
-            "systemInstruction": {"parts": [{"text": _system_instruction(pack)}]},
-            "realtimeInputConfig": {
-                "automaticActivityDetection": {
-                    "disabled": False,
-                    "prefixPaddingMs": 500,
-                    "silenceDurationMs": GEMINI_SILENCE_MS,
+    setup = {
+        "model": model,
+        "generationConfig": {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {"voiceName": GEMINI_VOICE}
                 }
             },
-            "inputAudioTranscription": transcription,
-            "outputAudioTranscription": transcription,
-        }
+        },
+        "systemInstruction": {"parts": [{"text": _system_instruction(pack)}]},
+        "realtimeInputConfig": {
+            "automaticActivityDetection": {
+                "disabled": False,
+                "prefixPaddingMs": 500,
+                "silenceDurationMs": GEMINI_SILENCE_MS,
+            }
+        },
+        "inputAudioTranscription": transcription,
+        "outputAudioTranscription": transcription,
+        # Always request updates so the newest handle can be persisted before a
+        # provider-side WebSocket reset.
+        "sessionResumption": {},
+        "contextWindowCompression": {"slidingWindow": {}},
     }
+    if resumption_handle:
+        setup["sessionResumption"]["handle"] = resumption_handle
+    if initial_history:
+        setup["historyConfig"] = {"initialHistoryInClientContent": True}
+    return {"setup": setup}
+
+
+def _gemini_history_message(history: list[dict]) -> dict | None:
+    turns = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("content") or "").strip()
+        if not text:
+            continue
+        role = "model" if item.get("role") == "assistant" else "user"
+        turns.append({"role": role, "parts": [{"text": text}]})
+    if not turns:
+        return None
+    return {"clientContent": {"turns": turns, "turnComplete": True}}
+
+
+def _remember_gemini_resumption_update(session_id: str, event: dict) -> None:
+    update = event.get("sessionResumptionUpdate")
+    if not isinstance(update, dict):
+        return
+    if update.get("resumable") and update.get("newHandle"):
+        engine.update_gemini_resumption_handle(session_id, update["newHandle"])
+    elif update.get("resumable") is False:
+        engine.update_gemini_resumption_handle(session_id, None)
+
+
+def _gemini_audio_delta_chunks(delta: str) -> list[str]:
+    if not isinstance(delta, str) or not delta:
+        return []
+    # Keep every intermediate chunk on a 4-character Base64 boundary. The
+    # remaining JSON envelope leaves room below the device's 64 KiB frame cap.
+    chunk_size = max(4, ((GEMINI_MAX_CLIENT_FRAME_BYTES - 256) // 4) * 4)
+    return [delta[index : index + chunk_size] for index in range(0, len(delta), chunk_size)]
+
+
+async def _send_gemini_audio_delta(client, delta: str) -> None:
+    for chunk in _gemini_audio_delta_chunks(delta):
+        await _send_json(client, {"type": "response.audio.delta", "delta": chunk})
+
+
+async def _open_gemini(
+    session_id: str,
+    pack: dict,
+    history: list[dict],
+    resumption_handle: str | None,
+):
+    initial_history = bool(history) and not resumption_handle
+    upstream = None
+    try:
+        upstream = await _connect(
+            GEMINI_URL,
+            {"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
+            use_proxy=GEMINI_USE_PROXY,
+        )
+        await upstream.send(
+            json.dumps(
+                _gemini_setup(
+                    pack,
+                    resumption_handle=resumption_handle,
+                    initial_history=initial_history,
+                ),
+                ensure_ascii=False,
+            )
+        )
+        while True:
+            raw = await asyncio.wait_for(
+                upstream.recv(), timeout=GEMINI_SETUP_TIMEOUT_SECONDS
+            )
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            try:
+                event = json.loads(raw)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("Gemini setup 返回了无效消息") from exc
+            if not isinstance(event, dict):
+                raise RuntimeError("Gemini setup 返回了非对象消息")
+            _remember_gemini_resumption_update(session_id, event)
+            if event.get("error"):
+                error = event["error"]
+                raise RuntimeError(
+                    error.get("message") or error.get("status") or "Gemini setup 失败"
+                )
+            if "setupComplete" in event:
+                break
+
+        if initial_history:
+            message = _gemini_history_message(history)
+            if message:
+                await upstream.send(json.dumps(message, ensure_ascii=False))
+        return upstream
+    except Exception:
+        if upstream is not None:
+            try:
+                await upstream.close()
+            except Exception:
+                pass
+        raise
 
 
 async def _bridge_gemini(client, session_id: str, pack: dict):
-    upstream = await _connect(
-        GEMINI_URL, {"x-goog-api-key": os.environ["GEMINI_API_KEY"]}
-    )
-    await upstream.send(json.dumps(_gemini_setup(pack), ensure_ascii=False))
-    first = json.loads(await asyncio.wait_for(upstream.recv(), timeout=20))
-    if "setupComplete" not in first:
-        raise RuntimeError((first.get("error") or {}).get("message", "Gemini setup 失败"))
-
-    await _send_json(client, {"type": "session.created", "provider": "gemini"})
-    await upstream.send(
-        json.dumps(
-            {
-                "clientContent": {
-                    "turns": [
-                        {
-                            "role": "user",
-                            "parts": [
-                                {
-                                    "text": _opening_instruction(pack)
-                                }
-                            ],
-                        }
-                    ],
-                    "turnComplete": True,
-                }
-            },
-            ensure_ascii=False,
-        )
-    )
-    _log(
-        f"已接通 Gemini Live · {GEMINI_MODEL} · voice={GEMINI_VOICE} · "
-        f"session={session_id}"
-    )
-
+    client_events: asyncio.Queue[dict] = asyncio.Queue(maxsize=GEMINI_CLIENT_QUEUE_SIZE)
+    client_closed = asyncio.Event()
+    response_finish_lock = asyncio.Lock()
     response_id = ""
     response_open = False
+    response_cancelled = False
     output_text: list[str] = []
     input_text: list[str] = []
     input_pending = False
+    session_created = False
+    outage_reported = False
+    retry_delay = GEMINI_RECONNECT_INITIAL_DELAY_SECONDS
+    current_upstream = None
+
+    async def read_client():
+        nonlocal response_cancelled
+        try:
+            while True:
+                raw = await client.receive_text()
+                try:
+                    event = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                event_type = event.get("type")
+                if event_type not in {
+                    "input_audio_buffer.append",
+                    "ling.video_frame",
+                    "ling.idle_nudge",
+                    "conversation.item.create",
+                    "response.cancel",
+                }:
+                    continue
+                if event_type == "input_audio_buffer.append":
+                    audio = event.get("audio")
+                    if not isinstance(audio, str) or not audio or len(audio) > GEMINI_MAX_AUDIO_CHARS:
+                        continue
+                if event_type == "response.cancel":
+                    response_cancelled = True
+                try:
+                    client_events.put_nowait(event)
+                except asyncio.QueueFull:
+                    # Video is opportunistic; audio/control events apply backpressure
+                    # so an upstream reconnect cannot silently reorder the conversation.
+                    if event_type == "ling.video_frame":
+                        continue
+                    await client_events.put(event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log(f"设备实时连接结束：{type(exc).__name__}")
+        finally:
+            client_closed.set()
 
     async def ensure_response():
         nonlocal response_id, response_open, output_text
-        if response_open:
+        if response_open or response_cancelled:
             return
         response_id = f"gemini-{uuid.uuid4().hex}"
         response_open = True
@@ -717,117 +867,146 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
         input_text = []
         input_pending = False
 
-    async def finish_response():
-        nonlocal response_id, response_open, output_text
-        if not response_open:
-            return
-        text = _normalize_transcript("".join(output_text))
+    async def finish_response(*, completed: bool = True, cancelled: bool = False):
+        nonlocal response_id, response_open, output_text, response_cancelled
+        async with response_finish_lock:
+            if not response_open:
+                if not cancelled:
+                    response_cancelled = False
+                return
+            was_cancelled = cancelled or response_cancelled
+            current_id = response_id
+            text = (
+                _normalize_transcript("".join(output_text))
+                if completed and not was_cancelled
+                else ""
+            )
+            state = engine.record_voice_doll(session_id, text) if text else None
+            response_id = ""
+            response_open = False
+            output_text = []
+            # Keep explicit cancellation active until Gemini reports turnComplete;
+            # a late serverContent event must not leak audio after the button press.
+            response_cancelled = bool(cancelled)
+
         if text:
             await _send_json(
                 client,
                 {
                     "type": "response.audio_transcript.done",
-                    "response_id": response_id,
+                    "response_id": current_id,
                     "transcript": text,
                 },
             )
-        state = engine.record_voice_doll(session_id, text) if text else None
         await _send_json(
-            client, {"type": "response.done", "response": {"id": response_id}}
+            client, {"type": "response.done", "response": {"id": current_id}}
         )
         if state:
             await _send_json(client, {"type": "ling.state", **state})
-        response_id = ""
-        response_open = False
-        output_text = []
 
-    async def pump_up():
-        while True:
-            raw = await client.receive_text()
+    async def send_event(upstream, event: dict):
+        nonlocal response_cancelled
+        event_type = event.get("type")
+        if event_type == "response.cancel":
+            # Gemini's automatic VAD protocol has no response.cancel message. Stop
+            # forwarding output locally and let the next user audio interrupt it.
+            response_cancelled = True
+            await finish_response(completed=False, cancelled=True)
+            return
+        if event_type == "input_audio_buffer.append":
+            # The next real user turn is allowed to produce a fresh response.
+            response_cancelled = False
+            audio = event.get("audio")
             try:
-                event = json.loads(raw)
+                _decode_base64(audio, 2)
             except ValueError:
-                continue
-            event_type = event.get("type")
-            if event_type == "input_audio_buffer.append" and event.get("audio"):
+                return
+            await upstream.send(
+                json.dumps(
+                    {
+                        "realtimeInput": {
+                            "audio": {
+                                "data": audio,
+                                "mimeType": "audio/pcm;rate=16000",
+                            }
+                        }
+                    }
+                )
+            )
+        elif event_type == "ling.video_frame":
+            message = _gemini_video_message(event)
+            if message:
+                await upstream.send(json.dumps(message))
+        elif event_type == "ling.idle_nudge":
+            nudge_number = engine.claim_idle_nudge(session_id)
+            if nudge_number:
                 await upstream.send(
                     json.dumps(
                         {
-                            "realtimeInput": {
-                                "audio": {
-                                    "data": event["audio"],
-                                    "mimeType": "audio/pcm;rate=16000",
-                                }
+                            "clientContent": {
+                                "turns": [
+                                    {
+                                        "role": "user",
+                                        "parts": [
+                                            {
+                                                "text": _idle_instruction(
+                                                    pack, nudge_number
+                                                )
+                                            }
+                                        ],
+                                    }
+                                ],
+                                "turnComplete": True,
                             }
-                        }
+                        },
+                        ensure_ascii=False,
                     )
                 )
-            elif event_type == "ling.video_frame":
-                message = _gemini_video_message(event)
-                if message:
-                    await upstream.send(json.dumps(message))
-            elif event_type == "ling.idle_nudge":
-                nudge_number = engine.claim_idle_nudge(session_id)
-                if nudge_number:
-                    await upstream.send(
-                        json.dumps(
-                            {
-                                "clientContent": {
-                                    "turns": [
-                                        {
-                                            "role": "user",
-                                            "parts": [
-                                                {
-                                                    "text": _idle_instruction(
-                                                        pack, nudge_number
-                                                    )
-                                                }
-                                            ],
-                                        }
-                                    ],
-                                    "turnComplete": True,
-                                }
-                            },
-                            ensure_ascii=False,
-                        )
+        elif event_type == "conversation.item.create":
+            texts = [
+                part.get("text", "")
+                for part in (event.get("item") or {}).get("content") or []
+                if part.get("type") in ("input_text", "text") and part.get("text")
+            ]
+            text = " ".join(texts).strip()
+            if text:
+                engine.record_voice_user(session_id, text)
+                await upstream.send(
+                    json.dumps(
+                        {
+                            "clientContent": {
+                                "turns": [
+                                    {"role": "user", "parts": [{"text": text}]}
+                                ],
+                                "turnComplete": True,
+                            }
+                        },
+                        ensure_ascii=False,
                     )
-            elif event_type == "conversation.item.create":
-                texts = [
-                    part.get("text", "")
-                    for part in (event.get("item") or {}).get("content") or []
-                    if part.get("type") in ("input_text", "text") and part.get("text")
-                ]
-                text = " ".join(texts).strip()
-                if text:
-                    engine.record_voice_user(session_id, text)
-                    await upstream.send(
-                        json.dumps(
-                            {
-                                "clientContent": {
-                                    "turns": [
-                                        {"role": "user", "parts": [{"text": text}]}
-                                    ],
-                                    "turnComplete": True,
-                                }
-                            },
-                            ensure_ascii=False,
-                        )
-                    )
+                )
 
-    async def pump_down():
-        nonlocal input_pending
+    async def receive_event(upstream):
+        nonlocal input_pending, input_text, output_text
         async for raw in upstream:
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8", errors="replace")
             try:
                 event = json.loads(raw)
-            except ValueError:
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(event, dict):
+                continue
+            _remember_gemini_resumption_update(session_id, event)
+            if event.get("goAway") is not None:
+                _log(f"Gemini Live 即将断开 · session={session_id}")
+                return
+            if event.get("sessionResumptionUpdate") is not None:
                 continue
             if event.get("error"):
                 error = event["error"]
-                _log(f"Gemini error：{error.get('code')} {error.get('message')}")
-                await _send_json(client, {"type": "error", **error})
-                continue
+                raise RuntimeError(
+                    error.get("message") or error.get("status") or "Gemini Live 上游错误"
+                )
 
             content = event.get("serverContent") or {}
             transcription = content.get("inputTranscription") or {}
@@ -841,30 +1020,28 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
             parts = model_turn.get("parts") or []
             output_transcription = content.get("outputTranscription") or {}
             has_output = bool(parts or output_transcription.get("text"))
-            if has_output:
+            if has_output and not response_cancelled:
                 # 输入 ASR 可能在模型开始输出后仍继续到达；等 turnComplete 再一次性提交，
                 # 避免把孩子的一句话拆成多个不完整气泡。
                 await ensure_response()
 
-            for part in parts:
-                inline_data = part.get("inlineData") or {}
-                if inline_data.get("data"):
+            if not response_cancelled:
+                for part in parts:
+                    inline_data = part.get("inlineData") or {}
+                    if inline_data.get("data"):
+                        await _send_gemini_audio_delta(client, inline_data["data"])
+
+                if output_transcription.get("text"):
+                    delta = output_transcription["text"]
+                    output_text.append(delta)
                     await _send_json(
                         client,
-                        {"type": "response.audio.delta", "delta": inline_data["data"]},
+                        {
+                            "type": "response.audio_transcript.delta",
+                            "response_id": response_id,
+                            "delta": delta,
+                        },
                     )
-
-            if output_transcription.get("text"):
-                delta = output_transcription["text"]
-                output_text.append(delta)
-                await _send_json(
-                    client,
-                    {
-                        "type": "response.audio_transcript.delta",
-                        "response_id": response_id,
-                        "delta": delta,
-                    },
-                )
 
             if content.get("interrupted"):
                 await _send_json(client, {"type": "input_audio_buffer.speech_started"})
@@ -873,7 +1050,139 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
                 await flush_input()
                 await finish_response()
 
-    await _run_pumps(client, upstream, pump_up, pump_down)
+    async def run_connection(upstream):
+        send_task = asyncio.create_task(
+            _drain_gemini_events(client_events, upstream, send_event)
+        )
+        receive_task = asyncio.create_task(receive_event(upstream))
+        try:
+            done, _ = await asyncio.wait(
+                {send_task, receive_task, reader_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if reader_task in done or client_closed.is_set():
+                return True, None
+            error = None
+            for task in done:
+                if task in {send_task, receive_task} and not task.cancelled():
+                    try:
+                        error = task.exception()
+                    except asyncio.CancelledError:
+                        error = None
+                    if error is not None:
+                        break
+            return False, error
+        finally:
+            for task in (send_task, receive_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(send_task, receive_task, return_exceptions=True)
+
+    async def wait_for_client_or_timeout(delay: float):
+        if client_closed.is_set():
+            return
+        try:
+            await asyncio.wait_for(client_closed.wait(), timeout=delay)
+        except asyncio.TimeoutError:
+            pass
+
+    async def report_outage(exc: Exception):
+        nonlocal outage_reported
+        if outage_reported or client_closed.is_set():
+            return
+        outage_reported = True
+        await _send_json(client, _provider_error_event("gemini", exc))
+
+    reader_task = asyncio.create_task(read_client())
+    try:
+        while not client_closed.is_set():
+            resume_handle = engine.gemini_resumption_handle(session_id)
+            history = engine.get_session_history(session_id)
+            upstream = None
+            try:
+                upstream = await _open_gemini(
+                    session_id, pack, history, resume_handle
+                )
+            except Exception as exc:
+                if resume_handle:
+                    # A stale handle can outlive the provider's two-hour window.
+                    # Fall back to the durable text history without replaying opening.
+                    engine.update_gemini_resumption_handle(
+                        session_id, None, expected=resume_handle
+                    )
+                    _log(f"Gemini 会话恢复失败，改用历史回放：{type(exc).__name__}")
+                    try:
+                        upstream = await _open_gemini(session_id, pack, history, None)
+                    except Exception as fallback_exc:
+                        exc = fallback_exc
+                if upstream is None:
+                    await report_outage(exc)
+                    await wait_for_client_or_timeout(retry_delay)
+                    retry_delay = min(
+                        GEMINI_RECONNECT_MAX_DELAY_SECONDS, retry_delay * 2
+                    )
+                    continue
+
+            current_upstream = upstream
+            if not session_created:
+                await _send_json(client, {"type": "session.created", "provider": "gemini"})
+                session_created = True
+            if not resume_handle and not history and engine.claim_opening(session_id):
+                await upstream.send(
+                    json.dumps(
+                        {
+                            "clientContent": {
+                                "turns": [
+                                    {
+                                        "role": "user",
+                                        "parts": [{"text": _opening_instruction(pack)}],
+                                    }
+                                ],
+                                "turnComplete": True,
+                            }
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+            _log(
+                f"已接通 Gemini Live · {GEMINI_MODEL} · voice={GEMINI_VOICE} · "
+                f"session={session_id} · resumed={'yes' if resume_handle else 'no'}"
+            )
+            outage_reported = False
+            retry_delay = GEMINI_RECONNECT_INITIAL_DELAY_SECONDS
+            client_done, error = await run_connection(upstream)
+            try:
+                await upstream.close()
+            except Exception:
+                pass
+            current_upstream = None
+            if client_done or client_closed.is_set():
+                return
+            # The device relies on response.done to leave speaking mode. A dropped
+            # provider response is incomplete, so close it locally without recording
+            # a partial sentence as durable doll speech.
+            await finish_response(completed=False)
+            input_text = []
+            input_pending = False
+            if error:
+                _log(f"Gemini Live 上游断开：{type(error).__name__}: {error}")
+                await report_outage(error)
+            await wait_for_client_or_timeout(retry_delay)
+            retry_delay = min(GEMINI_RECONNECT_MAX_DELAY_SECONDS, retry_delay * 2)
+    finally:
+        reader_task.cancel()
+        await asyncio.gather(reader_task, return_exceptions=True)
+        if current_upstream is not None:
+            try:
+                await current_upstream.close()
+            except Exception:
+                pass
+
+
+async def _drain_gemini_events(queue, upstream, send_event):
+    while True:
+        event = await queue.get()
+        await send_event(upstream, event)
 
 
 async def _receive_minicpm_event(upstream) -> dict:
@@ -1081,12 +1390,23 @@ async def _run_pumps(client, upstream, pump_up, pump_down, close_message=None):
         done, _ = await asyncio.wait(
             {up, down}, return_when=asyncio.FIRST_COMPLETED
         )
+        error = None
         for task in done:
-            if not task.cancelled():
-                task.exception()
+            if task.cancelled():
+                continue
+            try:
+                error = task.exception()
+            except asyncio.CancelledError:
+                error = None
+            if error is not None:
+                break
+        if error is not None:
+            raise error
     finally:
         for task in (up, down):
-            task.cancel()
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(up, down, return_exceptions=True)
         if close_message:
             try:
                 await upstream.send(json.dumps(close_message))

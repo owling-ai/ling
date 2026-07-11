@@ -36,7 +36,7 @@ POST /api/session/end
   -> 同步冷路径结果和 moment 状态
 ```
 
-当前 WebSocket 是浏览器 Demo 协议，媒体放在 JSON + Base64 中，不是正式硬件协议。会话状态主要在进程内；后端重启后不能恢复实时连接。
+当前 WebSocket 是浏览器 Demo 协议，媒体放在 JSON + Base64 中，不是正式硬件协议。业务 session、转写、记忆包、运行状态和 Gemini resumption handle 会落 SQLite；设备仍需重新建立 WebSocket，后端会优先用 Gemini token 恢复，token 失效时回放已完成的 user/model 文本历史。上游短暂不可用时，设备 WebSocket 保持打开并按退避重试。
 
 ## 交互规则
 
@@ -52,8 +52,10 @@ POST /api/session/end
 - MiniCPM 当前没有用户侧转写，依赖用户文本的记忆和词汇记账不完整。
 - StepFun 当前不发送视频。
 - 火山必须使用“AI 音视频互动方案”应用，不能混用“实时对话式 AI”AppId。
-- `websockets` 会读取系统代理变量；`wss://` 上游需要代理正确支持 CONNECT 与 WebSocket Upgrade。
+- `websockets` 会读取系统代理变量；`wss://` 上游需要代理正确支持 CONNECT 与 WebSocket Upgrade。Gemini 可用 `LING_GEMINI_USE_PROXY=false` 强制直连。
+- Gemini Live 连接会收到 `GoAway`，后端会利用已保存的 session resumption handle 自动重连；下行音频事件会按 `LING_REALTIME_MAX_CLIENT_FRAME_BYTES`（默认 64 KiB）分片。
 
 ## Change log
 
 - `2026-07-11`：从 2026-07-10 调研记录提取仍有效结论；加入 MiniCPM，删除账户、费用、提交号和排障过程等易过期内容。
+- `2026-07-11`：补充 Gemini Live session resumption、SQLite 历史回放、上游退避重连和设备帧上限行为。

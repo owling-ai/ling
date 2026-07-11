@@ -26,6 +26,73 @@ RETREAT_WORDS = ["不想", "无聊", "别说英语", "不要英语", "烦", "不
 POSITIVE_ACKS = ["好", "哇", "喜欢", "真", "酷", "棒", "想", "嗯"]
 
 
+def _initial_runtime_state() -> dict:
+    return {
+        "woven": [],
+        "produced": [],
+        "shared": False,
+        "pending_choice": False,
+        "retreated": False,
+        "canon_written": [],
+        "idle_nudges": 0,
+        "turn": 0,
+        "choice_done": False,
+        "opening_sent": False,
+    }
+
+
+def _runtime_state(session: dict) -> dict:
+    return {
+        "woven": list(session.get("woven") or []),
+        "produced": list(session.get("produced") or []),
+        "shared": bool(session.get("shared")),
+        "pending_choice": bool(session.get("pending_choice")),
+        "retreated": bool(session.get("retreated")),
+        "canon_written": list(session.get("canon_written") or []),
+        "idle_nudges": int(session.get("idle_nudges", 0)),
+        "turn": int(session.get("turn", 0)),
+        "choice_done": bool(session.get("choice_done")),
+        "opening_sent": bool(session.get("opening_sent")),
+    }
+
+
+def _restore_session(row: dict) -> dict:
+    state = db.jloads(row.get("state_json"), {})
+    if not isinstance(state, dict):
+        state = {}
+    runtime = _initial_runtime_state()
+    for key in runtime:
+        if key in state:
+            runtime[key] = state[key]
+
+    pack = db.jloads(row.get("pack_json"), {})
+    if not isinstance(pack, dict) or not pack:
+        pack = memory.build_memory_pack(row["child_id"])
+    history = db.jloads(row.get("transcript_json"), [])
+    if not isinstance(history, list):
+        history = []
+    return {
+        "session_id": row.get("session_key"),
+        "db_id": row["id"],
+        "child_id": row["child_id"],
+        "pack": pack,
+        "history": history,
+        "gemini_resumption_handle": row.get("gemini_resumption_handle"),
+        **runtime,
+    }
+
+
+def _persist_runtime(session: dict) -> None:
+    db.execute(
+        "UPDATE sessions SET transcript_json=?,state_json=? WHERE id=?",
+        (
+            json.dumps(session["history"], ensure_ascii=False),
+            json.dumps(_runtime_state(session), ensure_ascii=False),
+            session["db_id"],
+        ),
+    )
+
+
 # ---------------------------------------------------------------- 会话生命周期
 
 
@@ -61,26 +128,31 @@ def start_session(child_id: int) -> dict:
     child_name = pack["child_card"].get("name", "小朋友")
     doll_name = pack["doll_card"].get("name", "灵灵")
     opening = f"嗨，{child_name}，{doll_name}在呢！"
+    runtime = _initial_runtime_state()
 
     # 实际开场由实时模型生成并通过 record_voice_doll 入库；这里不能预写一条
     # 孩子尚未听到的记忆钩子，否则冷路径会处理出“幽灵转写”。
     sid = db.execute(
-        "INSERT INTO sessions(child_id,started_at,transcript_json) VALUES(?,?,?)",
-        (child_id, db.now(), "[]"),
+        "INSERT INTO sessions("
+        "child_id,started_at,transcript_json,session_key,pack_json,state_json"
+        ") VALUES(?,?,?,?,?,?)",
+        (
+            child_id,
+            db.now(),
+            "[]",
+            session_id,
+            json.dumps(pack, ensure_ascii=False),
+            json.dumps(runtime, ensure_ascii=False),
+        ),
     )
     session = {
+        "session_id": session_id,
         "db_id": sid,
         "child_id": child_id,
         "pack": pack,
         "history": [],
-        "woven": [],            # 玩偶已带出的目标词
-        "produced": [],         # 孩子已亲口说出的目标词
-        "shared": False,        # 待分享事件是否已经分享
-        "pending_choice": False,  # 互动拍已抛出，等孩子的决定
-        "retreated": False,     # 撤退规则已触发，今天不再复习
-        "canon_written": [],
-        "idle_nudges": 0,       # 冷场主动发言预算；跨模型重连仍属于同一场
-        "turn": 0,
+        **runtime,
+        "gemini_resumption_handle": None,
     }
     with _SESSIONS_GUARD:
         SESSIONS[session_id] = session
@@ -91,8 +163,78 @@ def start_session(child_id: int) -> dict:
 
 
 def get_session(session_id: str):
+    lock = _session_lock(session_id)
+    with lock:
+        with _SESSIONS_GUARD:
+            present = session_id in SESSIONS
+        if present:
+            return _active_session(session_id)
+
+        # 设备会在后端重启后复用业务 session ID。只有未结束的 DB 会话可以恢复；
+        # 已关闭会话仍是幂等墓碑，不能被重新打开。
+        row = db.q1(
+            "SELECT * FROM sessions "
+            "WHERE session_key=? AND ended_at IS NULL AND processed=0",
+            (session_id,),
+        )
+        if not row:
+            return None
+        session = _restore_session(row)
+        with _SESSIONS_GUARD:
+            existing = SESSIONS.get(session_id)
+            if existing is None:
+                SESSIONS[session_id] = session
+                return session
+            return _active_session(session_id)
+
+
+def get_session_history(session_id: str) -> list[dict]:
     with _session_lock(session_id):
-        return _active_session(session_id)
+        session = _active_session(session_id)
+        if not session:
+            return []
+        return [
+            dict(item)
+            for item in session.get("history", [])
+            if isinstance(item, dict)
+        ]
+
+
+def claim_opening(session_id: str) -> bool:
+    """Claim the one-time opening across reconnects and process restarts."""
+    with _session_lock(session_id):
+        session = _active_session(session_id)
+        if not session or session.get("opening_sent"):
+            return False
+        session["opening_sent"] = True
+        _persist_runtime(session)
+        return True
+
+
+def gemini_resumption_handle(session_id: str) -> str | None:
+    with _session_lock(session_id):
+        session = _active_session(session_id)
+        return session.get("gemini_resumption_handle") if session else None
+
+
+def update_gemini_resumption_handle(
+    session_id: str, handle: str | None, *, expected: str | None = None
+) -> bool:
+    """Persist the newest provider handle without overwriting a newer connection."""
+    with _session_lock(session_id):
+        session = _active_session(session_id)
+        if not session:
+            return False
+        current = session.get("gemini_resumption_handle")
+        if expected is not None and current != expected:
+            return False
+        session["gemini_resumption_handle"] = handle or None
+        db.execute(
+            "UPDATE sessions SET gemini_resumption_handle=?,"
+            "gemini_resumption_updated_at=? WHERE id=?",
+            (handle or None, db.now(), session["db_id"]),
+        )
+        return True
 
 
 def close_session(session_id: str, finalize_callback):
@@ -103,7 +245,16 @@ def close_session(session_id: str, finalize_callback):
             if _is_closed(session):
                 return session["result"]
             if session is None:
-                return None
+                row = db.q1(
+                    "SELECT * FROM sessions "
+                    "WHERE session_key=? AND ended_at IS NULL AND processed=0",
+                    (session_id,),
+                )
+                if not row:
+                    return None
+                session = _restore_session(row)
+                with _SESSIONS_GUARD:
+                    SESSIONS[session_id] = session
             session["closing"] = True
 
         result = finalize_callback(session)
@@ -123,12 +274,12 @@ def claim_idle_nudge(session_id: str, limit: int = 2) -> int | None:
         if not session or session.get("idle_nudges", 0) >= limit:
             return None
         session["idle_nudges"] = session.get("idle_nudges", 0) + 1
+        _persist_runtime(session)
         return session["idle_nudges"]
 
 
 def _save_transcript(s):
-    db.execute("UPDATE sessions SET transcript_json=? WHERE id=?",
-               (json.dumps(s["history"], ensure_ascii=False), s["db_id"]))
+    _persist_runtime(s)
 
 
 def _state_dict(s) -> dict:
