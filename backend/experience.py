@@ -18,6 +18,20 @@ EVENT_VALUE_FIELDS = {
 }
 MAX_DAILY_MOMENTS = 3
 MAX_GENERATION_ATTEMPTS = 2
+PARENT_TOPIC_LABELS = {
+    "恐龙": "恐龙",
+    "动物": "动物",
+    "画画": "画画",
+    "学校": "学校",
+    "家人": "家里的事",
+    "朋友": "朋友",
+    "英语": "英语",
+    "玩偶的世界": "橡树村",
+    "情绪": "心情",
+    "成长": "成长",
+    "日常": "日常",
+    "初次见面": "初次见面",
+}
 
 
 class ExperienceNotFound(KeyError):
@@ -712,12 +726,22 @@ class ExperienceService:
         return [{"before": row["before"], "after": row["after"]} for row in rows]
 
     @staticmethod
-    def _parent_diary_summary(diary: dict, topics: list[str]) -> str:
-        topic_text = "、".join(topics[:2]) if topics else "一次谈心"
-        summary = diary.get("summary") or ""
-        if "TA说" in summary or "「" in summary or "」" in summary:
-            return f"这次主要聊了{topic_text}，原话不在家长投影中展示。"
-        return summary
+    def _parent_diary_projection(topics: list[str]) -> dict:
+        labels = []
+        for topic in topics:
+            label = PARENT_TOPIC_LABELS.get(topic)
+            if label and label not in labels:
+                labels.append(label)
+        if not labels:
+            return {
+                "title": "一次共同经历",
+                "summary": "这次留下了一段共同经历。",
+            }
+        topic_text = "、".join(labels[:2])
+        return {
+            "title": topic_text,
+            "summary": f"这次主要聊了{topic_text}，留下了一段共同经历。",
+        }
 
     def parent_growth(
         self,
@@ -780,34 +804,44 @@ class ExperienceService:
         del now
         timeline: list[dict] = []
         for moment in db.q(
-            "SELECT id,title,story,published_at FROM moments "
-            "WHERE child_id=? AND status='published' ORDER BY published_at DESC",
+            "SELECT m.id,m.title,m.story,m.published_at,m.event_key,m.event_value,"
+            "k.name AS keepsake_name,k.description AS keepsake_description "
+            "FROM moments m LEFT JOIN keepsakes k ON k.moment_id=m.id "
+            "AND k.child_id=m.child_id WHERE m.child_id=? AND m.status='published' "
+            "ORDER BY m.published_at DESC",
             (child_id,),
         ):
-            timeline.append(
-                {
-                    "id": f'moment:{moment["id"]}',
-                    "occurred_at": moment["published_at"],
-                    "label": "专属瞬间",
-                    "kind": "moment",
-                    "title": moment["title"],
-                    "summary": moment["story"],
+            item = {
+                "id": f'moment:{moment["id"]}',
+                "occurred_at": moment["published_at"],
+                "label": "专属瞬间",
+                "kind": "moment",
+                "title": moment["title"],
+                "summary": moment["story"],
+            }
+            if moment["event_key"] == "canon_choice":
+                item["child_choice"] = moment["event_value"]
+            if moment["keepsake_name"]:
+                item["keepsake"] = {
+                    "label": moment["keepsake_name"],
+                    "description": moment["keepsake_description"] or "",
                 }
-            )
+            timeline.append(item)
         for diary in db.q(
             "SELECT id,ts,summary,topics_json FROM diary_entries "
             "WHERE child_id=? ORDER BY ts DESC LIMIT 20",
             (child_id,),
         ):
             topics = db.jloads(diary["topics_json"])
+            projection = self._parent_diary_projection(topics)
             timeline.append(
                 {
                     "id": f'attention:{diary["id"]}',
                     "occurred_at": diary["ts"],
                     "label": "共同经历",
                     "kind": "attention",
-                    "title": "、".join(topics[:2]) if topics else "一次谈心",
-                    "summary": self._parent_diary_summary(diary, topics),
+                    "title": projection["title"],
+                    "summary": projection["summary"],
                 }
             )
         for index, row in enumerate(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -166,10 +167,10 @@ def test_parent_memory_uses_projection_ids_and_has_no_deletion_targets(
         (
             1,
             "2026-07-11T11:00:00+08:00",
-            "悠悠和玩偶聊了学校，说了3句话。TA说：「我今天不想说英语」",
+            "孩子说: 我不想让家长看到这句原话",
             '["平静"]',
-            '["学校"]',
-            '["我今天不想说英语"]',
+            '["学校", "我不想让家长看到这句原话"]',
+            '["我不想让家长看到这句原话"]',
             "",
         ),
     )
@@ -188,9 +189,29 @@ def test_parent_memory_uses_projection_ids_and_has_no_deletion_targets(
     }
     assert not (_keys(memory) & PARENT_FORBIDDEN)
     summaries = " ".join(item.get("summary", "") for item in memory["items"])
-    assert "TA说" not in summaries
-    assert "「" not in summaries
-    assert "」" not in summaries
+    serialized = json.dumps(memory, ensure_ascii=False)
+    assert "孩子说" not in serialized
+    assert "我不想让家长看到这句原话" not in serialized
+    assert "学校" in summaries
+
+
+def test_parent_memory_projects_approved_child_choice_and_keepsake(
+    projection_service,
+) -> None:
+    service, clock, published, _ = projection_service
+
+    memory = service.parent_memory(1, limit=20, now=clock[0])
+    moment = next(
+        item
+        for item in memory["items"]
+        if item["id"] == f'moment:{published["moment_id"]}'
+    )
+
+    assert moment["child_choice"] == "橡果味"
+    assert moment["keepsake"] == {
+        "label": "橡果餐布",
+        "description": "一起决定生日蛋糕的味道",
+    }
 
 
 def test_parent_guardian_is_read_only_and_ai_identity_is_fixed(

@@ -58,3 +58,14 @@ test("preserves a useful projection error message for retry UI", async () => {
 
   await assert.rejects(() => parentApi.load("guardian"), /家长投影正在准备/);
 });
+
+test("normalizes browser network failures without leaking English internals", async () => {
+  const parentApi = createParentApi(async () => {
+    throw new TypeError("Failed to fetch");
+  });
+
+  await assert.rejects(
+    () => parentApi.load("today"),
+    (error) => error.message === "暂时无法连接灵灵，请检查网络后重试。",
+  );
+});

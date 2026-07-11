@@ -63,6 +63,8 @@ test("service worker activation only removes obsolete parent shell caches", asyn
       "ling-parent-shell-v0",
       "ling-parent-shell-v1",
       "ling-parent-shell-v2",
+      "ling-parent-shell-v3",
+      "ling-parent-shell-v4",
       "ling-child-shell-v3",
       "runtime-images",
     ],
@@ -72,7 +74,12 @@ test("service worker activation only removes obsolete parent shell caches", asyn
   listeners.get("activate")({ waitUntil: (promise) => { activation = promise; } });
   await activation;
 
-  assert.deepEqual(state.deleted, ["ling-parent-shell-v0", "ling-parent-shell-v1"]);
+  assert.deepEqual(state.deleted, [
+    "ling-parent-shell-v0",
+    "ling-parent-shell-v1",
+    "ling-parent-shell-v2",
+    "ling-parent-shell-v3",
+  ]);
   assert.equal(state.claims, 1);
 });
 
@@ -201,8 +208,9 @@ test("PWA launch URL, manifest scope, and service-worker registration are cohere
   assert.equal(manifest.start_url, "/parent/");
   assert.equal(manifest.scope, "/parent/");
   assert.match(app, /serviceWorker\.register\("\/parent\/sw\.js", \{ scope: "\/parent\/" \}\)/);
-  assert.match(serviceWorker, /"\/parent"/);
+  assert.doesNotMatch(serviceWorker, /"\/parent",/);
   assert.match(serviceWorker, /"\/parent\/"/);
+  assert.match(serviceWorker, /pathname\.startsWith\("\/parent\/"\)/);
 });
 
 test("PWA install metadata is mobile first and names the parent manual consistently", async () => {

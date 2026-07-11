@@ -4,12 +4,14 @@
 启动：uvicorn backend.app:app --reload
 """
 import json
+import hmac
+import ipaddress
 import os
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -33,6 +35,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_PROTECTED_API_PATHS = {
+    "/api/state",
+    "/api/onboarding",
+    "/api/curriculum",
+    "/api/diary",
+    "/api/facts",
+    "/api/growth",
+    "/api/mastery",
+    "/api/report",
+    "/api/world",
+}
+_PROTECTED_API_PREFIXES = ("/api/admin/", "/api/facts/")
+
+
+def _is_local_request(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    if host in {"localhost", "testclient"}:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return address.is_loopback or bool(mapped and mapped.is_loopback)
+
+
+def _has_debug_access(request: Request) -> bool:
+    if _is_local_request(request):
+        return True
+    expected = os.environ.get("LING_ADMIN_TOKEN", "").strip()
+    scheme, separator, supplied = request.headers.get("authorization", "").partition(" ")
+    return bool(
+        expected
+        and separator
+        and scheme.lower() == "bearer"
+        and hmac.compare_digest(supplied.strip(), expected)
+    )
+
+
+def _is_protected_api(request: Request) -> bool:
+    path = request.url.path
+    return (
+        request.method == "DELETE"
+        or path in _PROTECTED_API_PATHS
+        or path.startswith(_PROTECTED_API_PREFIXES)
+    )
+
+
+@app.middleware("http")
+async def protect_private_apis(request: Request, call_next):
+    is_api = request.url.path.startswith("/api/")
+    if (
+        is_api
+        and request.method != "OPTIONS"
+        and _is_protected_api(request)
+        and not _has_debug_access(request)
+    ):
+        response = JSONResponse(
+            status_code=403,
+            content={"detail": "该接口仅允许本机访问或使用管理令牌"},
+        )
+    else:
+        response = await call_next(request)
+    if is_api:
+        response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 CHILD_ID = db.CHILD_ID
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
@@ -255,13 +324,6 @@ def facts():
     return rows
 
 
-@app.delete("/api/facts/{fact_id}")
-def delete_fact(fact_id: int):
-    """家长可见可删 —— 合规答卷的一部分。"""
-    db.execute("DELETE FROM facts WHERE id=? AND child_id=?", (fact_id, CHILD_ID))
-    return {"ok": True}
-
-
 @app.get("/api/growth")
 def growth():
     return memory.list_snapshots(CHILD_ID)
@@ -442,16 +504,6 @@ def admin_reseed():
 
 
 # ---------------------------------------------------------------- 前端
-
-
-@app.get("/child", include_in_schema=False)
-def child_index():
-    return FileResponse(os.path.join(FRONTEND, "child", "index.html"))
-
-
-@app.get("/parent", include_in_schema=False)
-def parent_index():
-    return FileResponse(os.path.join(FRONTEND, "parent", "index.html"))
 
 
 app.mount("/demo-media", StaticFiles(directory=DEMO_MEDIA), name="demo-media")

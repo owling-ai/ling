@@ -31,10 +31,16 @@ export function createParentApi(fetchImplementation = globalThis.fetch?.bind(glo
 
   return {
     async load(tab, { signal } = {}) {
-      const response = await fetchImplementation(endpointFor(tab), {
-        headers: { Accept: "application/json" },
-        signal,
-      });
+      let response;
+      try {
+        response = await fetchImplementation(endpointFor(tab), {
+          headers: { Accept: "application/json" },
+          signal,
+        });
+      } catch (error) {
+        if (error?.name === "AbortError") throw error;
+        throw new Error("暂时无法连接灵灵，请检查网络后重试。");
+      }
       const data = await responseJson(response);
       if (!response.ok) {
         throw new Error(data.detail || data.message || `家长投影暂时不可用（HTTP ${response.status}）`);

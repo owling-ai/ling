@@ -30,7 +30,11 @@ def client(isolated_db: Path, monkeypatch: pytest.MonkeyPatch):
     experience._DEFAULT_SERVICE = None
     from backend.app import app
 
-    with TestClient(app, follow_redirects=False) as test_client:
+    with TestClient(
+        app,
+        follow_redirects=False,
+        client=("127.0.0.1", 50000),
+    ) as test_client:
         yield test_client
     engine.SESSIONS.clear()
     experience._DEFAULT_SERVICE = None
@@ -41,9 +45,12 @@ def assert_content_type(response, expected_prefix: str) -> None:
     assert response.headers["content-type"].startswith(expected_prefix)
 
 
-def test_child_and_parent_entrypoints_return_html_without_redirect(client: TestClient) -> None:
-    assert_content_type(client.get("/child"), "text/html")
-    assert_content_type(client.get("/parent"), "text/html")
+def test_child_and_parent_entrypoints_redirect_to_canonical_scope(client: TestClient) -> None:
+    for app_name in ("child", "parent"):
+        redirect = client.get(f"/{app_name}")
+        assert redirect.status_code in {307, 308}
+        assert redirect.headers["location"].endswith(f"/{app_name}/")
+        assert_content_type(client.get(f"/{app_name}/"), "text/html")
 
 
 def test_pwa_manifests_service_workers_and_icons_are_served(client: TestClient) -> None:
@@ -52,7 +59,9 @@ def test_pwa_manifests_service_workers_and_icons_are_served(client: TestClient) 
         assert_content_type(manifest_response, "application/manifest+json")
         manifest = manifest_response.json()
         assert manifest["display"] == "standalone"
-        assert manifest["start_url"].rstrip("/") == f"/{app_name}"
+        assert manifest["id"] == f"/{app_name}/"
+        assert manifest["start_url"] == f"/{app_name}/"
+        assert manifest["scope"] == f"/{app_name}/"
 
         sw_response = client.get(f"/{app_name}/sw.js")
         assert_content_type(sw_response, "text/javascript")
@@ -107,3 +116,68 @@ def test_parent_projection_guard_has_all_forbidden_internal_fields() -> None:
         "delete_url",
     ):
         assert json.dumps(forbidden) in model_source
+
+
+def test_api_responses_are_private_and_never_cached(client: TestClient) -> None:
+    for path in (
+        "/api/child/world/now",
+        "/api/parent/today",
+        "/api/moments/999999",
+        "/api/not-a-real-route",
+    ):
+        response = client.get(path)
+        directives = {
+            item.strip() for item in response.headers.get("cache-control", "").split(",")
+        }
+        assert {"private", "no-store"}.issubset(directives), path
+
+
+def test_remote_debug_and_admin_apis_require_a_token(
+    isolated_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LING_ADMIN_TOKEN", raising=False)
+    from backend.app import app
+
+    with TestClient(
+        app,
+        follow_redirects=False,
+        client=("203.0.113.10", 50000),
+    ) as remote:
+        for method, path in (
+            (remote.get, "/api/facts"),
+            (remote.get, "/api/state"),
+            (remote.post, "/api/admin/reseed"),
+        ):
+            response = method(path)
+            assert response.status_code == 403, path
+            assert response.headers["cache-control"] == "private, no-store"
+
+        assert remote.get("/api/child/feed").status_code == 200
+        assert remote.get("/api/parent/today").status_code == 200
+
+
+def test_remote_debug_api_accepts_configured_bearer_token(
+    isolated_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LING_ADMIN_TOKEN", "demo-test-token")
+    from backend.app import app
+
+    with TestClient(
+        app,
+        follow_redirects=False,
+        client=("203.0.113.10", 50000),
+        headers={"Authorization": "Bearer demo-test-token"},
+    ) as remote:
+        assert remote.get("/api/facts").status_code == 200
+
+
+def test_legacy_per_fact_delete_is_not_routed(client: TestClient) -> None:
+    assert client.delete("/api/facts/1").status_code in {404, 405}
+
+
+def test_demo_runner_is_local_only_by_default() -> None:
+    runner = (ROOT / "run.sh").read_text(encoding="utf-8")
+    assert "--host 127.0.0.1" in runner
+    assert "--host 0.0.0.0" not in runner

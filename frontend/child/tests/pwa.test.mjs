@@ -191,9 +191,12 @@ test("service worker caches only the child shell and does not cache business API
   ]) {
     assert.ok(source.includes(`"${path}"`), `expected absolute shell path ${path}`);
   }
-  assert.match(source, /CACHE_NAME\s*=\s*`\$\{CACHE_PREFIX\}-v4`/);
+  assert.match(source, /CACHE_NAME\s*=\s*`\$\{CACHE_PREFIX\}-v5`/);
   assert.match(source, /pathname\.startsWith\("\/api\/"\)/);
   assert.doesNotMatch(source, /cache\.put\([^\n]*\/api\//);
+  assert.match(source, /await self\.skipWaiting\(\)/);
+  assert.match(source, /await self\.clients\.claim\(\)/);
+  assert.match(source, /await cache\.put\(request, response\.clone\(\)\)/);
   assert.match(app, /serviceWorker\.register\("\.\/sw\.js",\s*\{\s*scope:\s*"\/child\/"\s*\}\)/);
 });
 

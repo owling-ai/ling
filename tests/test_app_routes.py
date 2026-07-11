@@ -22,8 +22,8 @@ def client(isolated_db: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_mobile_apps_and_demo_media_are_served(client: TestClient) -> None:
-    assert client.get("/child").status_code == 200
-    assert client.get("/parent").status_code == 200
+    assert client.get("/child/").status_code == 200
+    assert client.get("/parent/").status_code == 200
     media_response = client.get("/demo-media/hill-wind-a.mp4")
     assert media_response.status_code == 200
     assert media_response.headers["content-type"].startswith("video/mp4")

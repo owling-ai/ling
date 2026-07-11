@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier, Event, Lock
@@ -9,6 +10,25 @@ import pytest
 
 from backend import db, engine, llm, memory, seed, workers
 from backend.app import EndBody, session_end
+
+
+class ObservedLock:
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._state_lock = Lock()
+        self._attempts = 0
+        self.second_attempted = Event()
+
+    def __enter__(self):
+        with self._state_lock:
+            self._attempts += 1
+            if self._attempts == 2:
+                self.second_attempted.set()
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, *_exc_info) -> None:
+        self._lock.release()
 
 
 def _close_main_connection() -> None:
@@ -148,6 +168,11 @@ def test_concurrent_live_session_end_calls_worker_once_and_reuses_result(
     worker_started = Event()
     release_worker = Event()
 
+    def fail_if_worker_polls(*_args, **_kwargs):
+        raise AssertionError("concurrent session processing must wait on a lock, not sleep-poll")
+
+    monkeypatch.setattr(time, "sleep", fail_if_worker_polls)
+
     def controlled_worker_json(prompt: str, *args, **kwargs):
         with calls_lock:
             calls.append(prompt)
@@ -179,6 +204,10 @@ def test_concurrent_live_session_end_calls_worker_once_and_reuses_result(
     engine.record_voice_doll(session_id, "panda 是熊猫呀")
     session_db_id = engine.SESSIONS[session_id]["db_id"]
     body = EndBody(session_id=session_id)
+    observed_lock = ObservedLock()
+    with workers._SESSION_LOCKS_GUARD:
+        previous_lock = workers._SESSION_LOCKS.get(session_db_id)
+        workers._SESSION_LOCKS[session_db_id] = observed_lock
 
     def end_session() -> dict:
         start.wait()
@@ -189,9 +218,11 @@ def test_concurrent_live_session_end_calls_worker_once_and_reuses_result(
         futures = [pool.submit(end_session) for _ in range(2)]
         start.wait()
         assert worker_started.wait(timeout=5)
+        assert observed_lock.second_attempted.wait(timeout=5)
         assert db.q1(
-            "SELECT processed,processing FROM sessions WHERE id=?", (session_db_id,)
-        ) == {"processed": 0, "processing": 1}
+            "SELECT processed,processing,processing_started_at FROM sessions WHERE id=?",
+            (session_db_id,),
+        ) == {"processed": 0, "processing": 0, "processing_started_at": None}
         with calls_lock:
             assert len(calls) == 1
         release_worker.set()
@@ -199,6 +230,11 @@ def test_concurrent_live_session_end_calls_worker_once_and_reuses_result(
     finally:
         release_worker.set()
         pool.shutdown(wait=True, cancel_futures=True)
+        with workers._SESSION_LOCKS_GUARD:
+            if previous_lock is None:
+                workers._SESSION_LOCKS.pop(session_db_id, None)
+            else:
+                workers._SESSION_LOCKS[session_db_id] = previous_lock
 
     assert results[0] == results[1]
     assert len(calls) == 2

@@ -17,8 +17,8 @@
 打开这些入口：
 
 - `http://localhost:8888/`：旧网页玩偶/调试控制台，保留实时语音和记忆调试能力。
-- `http://localhost:8888/child`：儿童端「灵灵的窗口」，手机优先 PWA，展示全局基础世界、孩子私有瞬间和信物口袋。
-- `http://localhost:8888/parent`：家长端「训练师手册」，手机优先 PWA，只读取受控家长投影。
+- `http://localhost:8888/child/`：儿童端「灵灵的窗口」，手机优先 PWA，展示全局基础世界、孩子私有瞬间和信物口袋。
+- `http://localhost:8888/parent/`：家长端「训练师手册」，手机优先 PWA，只读取受控家长投影。
 - `http://localhost:8888/design`：已批准的积木 + 夜灯昼夜视觉稿。
 
 本轮黑客松不现场调用 Seedance/Veo。后端用 `MockMediaProvider` 模拟“提交生成 -> 渲染中 -> 发布”的状态机，实际展示读取 `backend/demo_media/` 下预生成的本地 MP4/PNG。彩排时可触发一个专属瞬间：
@@ -30,6 +30,8 @@ curl -X POST http://localhost:8888/api/admin/demo-moment \
 ```
 
 随后儿童端 feed 会先出现 `rendering`，约 2-4 秒后 `/api/moments/{id}` 发布本地视频与信物；收藏状态通过 `/api/pocket/{keepsake_id}` 持久化。
+
+服务默认只监听 `127.0.0.1`。管理接口和旧调试控制台的原始记忆接口只允许本机访问；显式改为对外监听时，需设置 `LING_ADMIN_TOKEN` 并通过 `Authorization: Bearer <token>` 访问这些接口。儿童端和家长端只使用受控投影，不需要管理令牌。
 
 常用验证命令：
 
