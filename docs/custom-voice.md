@@ -2,7 +2,7 @@
 
 > 验证日期：2026-07-11
 >
-> 当前实现：Gemini 文本模型 + ByteRTC + 豆包语音合成大模型 2.0
+> 当前实现：Gemini 文本模型 + ByteRTC / ESP32 PCM 网关 + 豆包语音合成大模型 2.0
 
 ## 1. 结论
 
@@ -49,10 +49,20 @@ Gemini Live 的实验 `replicatedVoiceConfig` 也没有作为替代：
   -> ByteRTC 下行音频与字幕
 ```
 
+现有 ESP32 使用另一条同源童声路径，保持原固件协议：
+
+```text
+ESP32 16 kHz PCM -> 火山独立流式 ASR -> Gemini 标准文本模型
+                 -> seed-tts-2.0“小晴天” -> 24 kHz PCM WebSocket
+```
+
 关键实现：
 
 - `backend/voice_profiles.py`：服务端童声白名单和默认回退；
 - `backend/volcengine_rtc.py`：RTC 任务、Gemini CustomLLM 配置、TTS profile 和 OpenAI payload 过滤；
+- `backend/speech_asr.py`：ESP32 上行 PCM 的火山流式 ASR 二进制协议；
+- `backend/gemini_text.py`：硬件网关的 Gemini 标准文本调用；
+- `backend/child_tts.py`：硬件网关的 `seed-tts-2.0` PCM 合成；
 - `POST /integrations/volcengine/gemini`：只供火山云端调用的 SSE 适配端点；
 - `frontend/assets/app.js`：试听、单选、持久化和通话中锁定；
 - `frontend/assets/voices/manifest.json`：公开试听来源、profile、哈希和评审结果，不包含上游 voice ID。
@@ -67,7 +77,7 @@ Gemini Live 的实验 `replicatedVoiceConfig` 也没有作为替代：
 
 该约束通过 `VolcanoTTSParameters.req_params.context_texts` 随 RTC 任务持续生效，不修改音高，也不做播放端后处理。
 
-默认 profile 为 `sunny`。环境变量 `LING_VOLC_VOICE_PROFILE` 只接受 `sunny` 或 `sprout`；RTC 或硬件客户端只传 `session_id` 即可直接获得默认童声。网页调试台可以提交公开 profile ID 进行两档验收；未传、非法或已经删除的 ID 都回退到 `sunny`。profile 在 `/api/gemini/prepare` 时绑定，通话中不能切换。
+默认 profile 为 `sunny`。环境变量 `LING_VOLC_VOICE_PROFILE` 只接受 `sunny` 或 `sprout`；RTC 客户端省略 profile 时直接获得默认童声。网页调试台可以提交公开 profile ID 进行两档验收；未传、非法或已经删除的 ID 都回退到 `sunny`。RTC profile 在 `/api/gemini/prepare` 时绑定，通话中不能切换。ESP32 PCM 网关不接受 profile 参数，始终采用服务端默认值，当前为“小晴天”。
 
 ## 5. 评审方法
 
@@ -122,6 +132,16 @@ Gemini Live 的实验 `replicatedVoiceConfig` 也没有作为替代：
 
 这组结果验证了 `ByteRTC ASR -> Gemini SSE -> seed-tts-2.0 -> ByteRTC`，但不代替真实儿童说话、家庭 Wi-Fi、回声消除和玩偶扬声器环境测试。
 
+### 5.5 ESP32 PCM 完整回路
+
+独立 Speech SaaS 激活后，按现有固件协议完成了真实云端回环：
+
+- 16 kHz 测试 PCM 被 ASR 完整定稿为“你好，玲玲。你看得到我吗？我手里拿着什么颜色的东西？”；
+- Gemini `gemini-3.1-flash-lite` 只接收和输出文本，不建立 Gemini Live 音频会话；
+- “小晴天”返回 `499,288` 字节有效 24 kHz mono PCM16，时长约 `10.40s`；
+- 从 ASR `speech_stopped` 到首个完整 TTS 音频帧约 `2.54s`；
+- 事件顺序包含 `speech_started/stopped`、用户转写、`response.created`、音频分片和 `response.done`，单帧低于设备 `64 KiB` 上限。
+
 ## 6. 配置
 
 ```bash
@@ -135,6 +155,11 @@ LING_VOLC_GEMINI_LLM_URL=https://ling.example.com/integrations/volcengine/gemini
 LING_VOLC_GEMINI_MODEL=gemini-3.1-flash-lite
 LING_VOLC_VOICE_PROFILE=sunny
 LING_REALTIME_PROVIDER=volcengine
+
+# 现有 ESP32 PCM 固件
+VOLCENGINE_SPEECH_API_KEY=...
+LING_GEMINI_PCM_CHILD_TTS=1
+LING_GEMINI_PCM_MODEL=gemini-3.1-flash-lite
 ```
 
 `LING_VOLC_GEMINI_LLM_URL` 必须是公网 HTTPS URL，并路由到运行当前进程的同一个 Ling 服务。若未配置，火山 RTC 可回退到 Ark，但 Gemini provider 不会回退到 Gemini Live 原声音频。
@@ -155,7 +180,7 @@ Gemini 回调与调试 API 使用不同鉴权边界：
 - 级联链路延迟高于 Gemini Live 原生音频；应继续测量首音频帧，而不只测字幕。
 - Gemini 文本模型无法直接获得原生音频模型全部的语气理解信息；当前依赖 ASR 文本和视频帧。
 - `seed-tts-2.0` 仍是生成模型，极端文本下可能出现演绎波动；生产前需要目标玩偶扬声器上的 20 轮长聊验收。
-- ESP32 不能直接使用 ByteRTC Web SDK。硬件端需要 RTC 原生 SDK、网关或独立设备协议。
+- ESP32 不能直接使用 ByteRTC Web SDK；现有固件已通过服务端 PCM 网关接入，但设备鉴权、二进制媒体帧和视频仍需正式 Device API。
 - profile 是公版合成声，不代表真实儿童身份，也不得用于冒充某个真人。
 
 ## 9. 复制音色边界

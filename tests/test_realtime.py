@@ -52,6 +52,8 @@ def test_gemini_setup_and_history_recovery_messages(
     assert setup["sessionResumption"] == {"handle": "handle-1"}
     assert setup["historyConfig"] == {"initialHistoryInClientContent": True}
     assert setup["contextWindowCompression"] == {"slidingWindow": {}}
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+    assert "outputAudioTranscription" in setup
 
     message = realtime._gemini_history_message(
         [
@@ -298,6 +300,7 @@ def test_pcm_websocket_never_routes_gemini_to_native_audio(
         raise AssertionError("native Gemini audio was called")
 
     monkeypatch.setenv("GEMINI_API_KEY", "configured-but-disabled")
+    monkeypatch.setattr(realtime, "GEMINI_PCM_CHILD_TTS", False)
     monkeypatch.setattr(realtime, "_bridge_gemini", native_audio_must_not_run)
     client = Client()
 
@@ -315,6 +318,39 @@ def test_pcm_websocket_never_routes_gemini_to_native_audio(
             "retryable": False,
         }
     ]
+
+
+def test_pcm_websocket_routes_gemini_to_child_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.accepted = False
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+    called = []
+
+    async def child_gateway(_client, session_id, pack) -> None:
+        called.append((session_id, pack))
+
+    async def native_audio_must_not_run(*_args, **_kwargs) -> None:
+        raise AssertionError("native Gemini audio was called")
+
+    monkeypatch.setattr(realtime, "GEMINI_PCM_CHILD_TTS", True)
+    monkeypatch.setattr(realtime, "provider_available", lambda _provider: True)
+    monkeypatch.setattr(
+        realtime.engine, "get_session", lambda _session_id: {"pack": {"safe": True}}
+    )
+    monkeypatch.setattr(realtime, "_bridge_gemini_child_pcm", child_gateway)
+    monkeypatch.setattr(realtime, "_bridge_gemini", native_audio_must_not_run)
+    client = Client()
+
+    asyncio.run(realtime.bridge(client, "hardware-session", "gemini"))
+
+    assert client.accepted is True
+    assert called == [("hardware-session", {"safe": True})]
 
 
 def test_child_voice_profiles_expose_only_bundled_safe_choices() -> None:

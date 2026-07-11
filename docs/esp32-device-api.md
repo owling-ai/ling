@@ -1,8 +1,8 @@
 # ESP32 Device API 提案
 
-状态：**未实现**。更新：2026-07-11。
+状态：**P0 兼容网关已实现；正式 Device API 未实现**。更新：2026-07-11。
 
-本文只保留硬件接入边界和建议协议。当前代码没有 `/api/device/v1/*`、设备身份、绑定、二进制媒体帧或断线恢复。
+现有 ESP32 固件可继续使用会话 API 和 JSON + Base64 PCM WebSocket，并获得默认“小晴天”童声。当前代码仍没有 `/api/device/v1/*`、设备身份、正式绑定或二进制媒体帧。
 
 ## 当前可做的 P0 原型
 
@@ -10,23 +10,24 @@ ESP32 可在隔离网络中复用浏览器 Demo 协议：
 
 ```text
 POST /api/session/start
-WS   /api/realtime/ws?session_id=<id>&provider=stepfun|minicpm
+WS   /api/realtime/ws?session_id=<id>&provider=gemini|stepfun|minicpm
 POST /api/session/end
 ```
 
-该兼容协议只保留 StepFun 或 MiniCPM。`provider=gemini` 不再调用 Gemini Live 原声音频，而是返回 `rtc_transport_required`；`sunny` / `sprout` 童声依赖 ByteRTC，不走这条 WebSocket 媒体面。
+`provider=gemini` 走服务端童声网关：设备的 16 kHz PCM 进入火山独立流式 ASR，定稿文本交给 Gemini 标准文本模型，回复再由 `seed-tts-2.0` 默认“小晴天”合成为 24 kHz PCM。该路径不连接 Gemini Live，也没有成人音频回退。
 
 当前响应和限制：
 
 - `session/start` 返回 `session_id`、`opening`、`review_items`，不返回完整记忆包。
 - WebSocket 使用 JSON + Base64，不适合量产带宽和内存预算。
+- Gemini：16 kHz mono PCM16 上行；独立 ASR 判停；Gemini 文本回复；24 kHz mono PCM16“小晴天”下行；当前硬件路径无视频。
 - StepFun：24 kHz PCM16 双向、无视频。
 - MiniCPM：设备仍按 16 kHz PCM16 上行，后端负责协议和格式转换；当前无用户 ASR。
-- Gemini 童声和火山 Ark 方案依赖 ByteRTC；支持 ByteRTC 的硬件调用 `/api/gemini/prepare` 时省略 `voice_profile` 即默认使用“小晴天”。裸 ESP32 不能复用 Web SDK，仍需要 RTC 原生 SDK 或 Device Gateway。
+- 浏览器 Gemini 仍使用 ByteRTC，并可在调试台选择 `sunny` 或 `sprout`。ESP32 不传 `voice_profile`，后端固定使用服务端默认值，当前为 `sunny`。
 - 固定 `CHILD_ID=1`，没有设备鉴权或绑定。
 - `/api/session/end` 同步运行冷路径，可能耗时。
-- 业务 session 和转写已持久化；实时 WebSocket 本身仍需重新建立。
-- 下行 `response.audio.delta` 会控制在单帧 64 KiB 以内，过大的 Gemini 音频块由后端分片。
+- 业务 session、文本历史和转写已持久化；实时 WebSocket 与 ASR 流本身仍需重新建立。复用同一 `session_id` 不重复 opening。
+- 下行 `response.audio.delta` 会控制在单帧 64 KiB 以内，过大的童声 PCM 会由后端分片。
 
 P0 仅用于验证 I2S、采集、播放和网络链路。没有可靠 AEC 时使用按键说话或半双工，不宣称全双工打断。
 
@@ -91,7 +92,7 @@ Offset  Size  Field
 ## 后端待实现
 
 - 设备身份、家长绑定、令牌吊销和日志脱敏。
-- 持久会话、幂等创建/结束、重连与异步冷路径。
+- 设备级持久会话、幂等创建/结束、带有效期的重连窗口与异步冷路径。
 - 二进制帧、队列、心跳、流控和采样率转换。
 - 归一化 Provider Adapter；网页与设备共享业务状态，不复制记忆逻辑。
 - 多实例前引入共享会话存储和任务队列。
@@ -106,6 +107,7 @@ Offset  Size  Field
 
 ## Change log
 
-- `2026-07-11`：禁用 ESP32 PCM WebSocket 的 Gemini Live 原声音频；`provider=gemini` 现在明确要求迁移到童声 RTC 或 Device Gateway。
-- `2026-07-11`：明确 Gemini 童声使用 ByteRTC，不能通过裸 ESP32 兼容 WebSocket 选择 profile。
+- `2026-07-11`：实现 ESP32 PCM 童声网关；`provider=gemini` 现走独立流式 ASR、Gemini 文本和默认“小晴天”TTS，保持原固件事件契约。
+- `2026-07-11`：硬件不选择 profile；网页 ByteRTC 调试仍可选择“小晴天 / 小青芽”。
+- `2026-07-11`：禁用 ESP32 PCM WebSocket 的 Gemini Live 原声音频，且新网关不生成该音频。
 - `2026-07-11`：按当前代码修正 `session/start` 响应，加入 MiniCPM；删除把建议协议写成现有能力的内容，压缩为明确的未实现提案。

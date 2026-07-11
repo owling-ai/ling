@@ -5,8 +5,9 @@
 ## 已实现
 
 - 一个 FastAPI 服务提供旧玩偶调试台、孩子端 App PWA、家长端 App PWA 与 JSON API。调试台不是独立产品端。
-- StepFun、MiniCPM-o 经 `/api/realtime/ws` 代理；Gemini 童声与火山 Ark 使用 ByteRTC 和独立控制面 API。Gemini Live 原声音频已禁用。
-- Gemini 童声通过鉴权 SSE 回调使用 Gemini 文本模型；产品 API 使用 `/api/gemini/*`，内部由 ByteRTC 承载，并提供“小晴天 / 小青芽”两档 `seed-tts-2.0` 白名单、实际 RTC 试听和非法 ID 回退。
+- StepFun、MiniCPM-o 经 `/api/realtime/ws` 代理；浏览器 Gemini 童声与火山 Ark 使用 ByteRTC 和独立控制面 API。Gemini Live 原声音频已禁用。
+- 现有 ESP32 的同一 WebSocket 已接入童声 PCM 网关：16 kHz 上行经火山流式 ASR，Gemini 标准文本模型生成回复，默认“小晴天”以 24 kHz PCM 下行；硬件不选择 profile。
+- 浏览器 Gemini 童声通过鉴权 SSE 回调使用 Gemini 文本模型；产品 API 使用 `/api/gemini/*`，内部由 ByteRTC 承载，并提供“小晴天 / 小青芽”两档 `seed-tts-2.0` 白名单、实际 RTC 试听和非法 ID 回退。
 - L1-L4、会话转写、事实演化、SRS、议程、私有 Canon、故事弧与成长快照落 SQLite。
 - 会话结束幂等处理冷路径，并可创建最多两次 attempt 的专属瞬间生成任务。
 - 基础世界由 `base_world.json` 驱动；视频变体分配持久化到 `world_assignments`。
@@ -15,13 +16,13 @@
 - 双端绑定 Demo 已实现：孩子端先扫登记二维码进入等待，家长端后扫同一码后激活；状态落 SQLite，可从演示控制台重置。
 - 媒体默认走可恢复 Mock 状态机；Seedance 任务可后台提交、轮询、下载并原子发布。
 - 调试、会话、实时和 admin API 可通过本机检查或 `LING_ADMIN_TOKEN` 保护。
-- Gemini 实时会话支持 SQLite session 恢复、官方 resumption token、文本历史兜底、上游退避重连和下行音频帧分片；设备正式二进制协议仍未实现。
+- 会话支持 SQLite session 恢复和文本历史兜底；旧 Gemini Live 适配仍保留 resumption 单测但不参与产品路由。ESP32 网关支持打断、opening 去重和下行音频帧分片；正式二进制设备协议仍未实现。
 
 ## 规格差异
 
 | 规格主题 | 当前代码 | 结论 |
 |---|---|---|
-| 实体玩偶 | 只有浏览器模拟器 | 硬件未实现 |
+| 实体玩偶 | 现有 ESP32 已能通过 P0 PCM 网关语音对话 | 设备身份、正式绑定和量产协议未实现 |
 | 首次孵化 | 两个 PWA 已形成孩子先扫、家长后扫的 Demo 绑定流程 | 固定 `CHILD_ID=1`，不是正式账户/家庭系统 |
 | 孩子端 App“相处”模式 | 当前页只有“去找灵灵”体验入口；实时交互仍在根页面调试台，实体设备跳转契约未冻结 | 部分实现 |
 | 家长守护设置 | 时段、上限、提醒和 AI 身份由后端固定返回 | 只读展示，不可配置 |
@@ -39,12 +40,13 @@
 
 - `/api/session/start` 当前只返回 `session_id`、`opening`、`review_items`，不再返回完整 `memory_pack`。
 - `/api/session/end` 当前同步等待冷路径完成；不是正式设备协议期望的 `202 Accepted`。
-- 现有 WebSocket 使用 JSON + Base64；MiniCPM 已加入，Gemini 童声和火山 RTC 不走该 WebSocket。
+- 现有 WebSocket 使用 JSON + Base64；MiniCPM 与 ESP32 Gemini 童声网关走该协议，浏览器 Gemini 和火山 RTC 媒体不走该 WebSocket。
 - 当前媒体类名是 `MockMediaProvider` 与 `JimengArkProvider`；代码中没有 `VeoVideoProvider`。
 - 面向孩子的产品统一为孩子端 App「灵灵」；当前 `child/` 只实现浏览状态，旧调试台仍是开发工具，不是额外的孩子产品端。
 
 ## Change log
 
+- `2026-07-11`：为现有 ESP32 上线独立 ASR、Gemini 文本和“小晴天”PCM 网关，同时保持 Gemini Live 成人音频禁用。
 - `2026-07-11`：用两档原生童声、Gemini SSE 回调和实际 RTC 试听替换未通过听感验收的 Gemini 成人角色音色。
 - `2026-07-11`：记录黑客松双端扫码绑定已经落地，并明确它不等同于生产账户或硬件鉴权。
 - `2026-07-11`：明确孩子端 App「灵灵」是唯一孩子 App；根页面仅为实体玩偶模拟器与调试工具。

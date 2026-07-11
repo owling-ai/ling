@@ -16,7 +16,7 @@ import uuid
 from array import array
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from . import engine, prompts, voice_profiles
+from . import child_tts, engine, gemini_text, prompts, speech_asr, voice_profiles
 
 STEPFUN_URL = os.environ.get("LING_STEPFUN_URL", "wss://api.stepfun.com/v1/realtime")
 STEPFUN_MODEL = os.environ.get("LING_STEPFUN_MODEL", "stepaudio-2.5-realtime")
@@ -68,6 +68,12 @@ GEMINI_MAX_AUDIO_CHARS = max(
 GEMINI_MAX_CLIENT_FRAME_BYTES = max(
     4096, int(os.environ.get("LING_REALTIME_MAX_CLIENT_FRAME_BYTES", "65536"))
 )
+GEMINI_PCM_CHILD_TTS = os.environ.get("LING_GEMINI_PCM_CHILD_TTS", "").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 VOLC_GEMINI_LLM_URL = os.environ.get("LING_VOLC_GEMINI_LLM_URL", "").strip()
 VOLC_GEMINI_MODEL = os.environ.get(
@@ -109,12 +115,15 @@ PROVIDER_INFO = {
         "short_label": "StepFun",
     },
     "gemini": {
-        "model": GEMINI_MODEL,
-        "voice": GEMINI_VOICE,
+        "model": gemini_text.GEMINI_TEXT_MODEL,
+        "voice": voice_profiles.resolve_voice_profile()["voice"],
+        "voice_profile": voice_profiles.resolve_voice_profile()["id"],
         "input_sample_rate": 16000,
         "output_sample_rate": 24000,
-        "supports_video": True,
-        "label": "Gemini 原声",
+        "supports_video": False,
+        "transport": "pcm_child_gateway",
+        "llm_provider": "gemini",
+        "label": "Gemini",
         "short_label": "Gemini",
     },
     "volcengine": {
@@ -177,8 +186,12 @@ VOICE_NOTE = """
 
 def provider_available(provider: str) -> bool:
     if provider == "gemini":
-        # Product Gemini is the child-voice RTC pipeline. Native Live audio is disabled.
-        return False
+        return bool(
+            GEMINI_PCM_CHILD_TTS
+            and gemini_text.available()
+            and speech_asr.available()
+            and child_tts.available()
+        )
     if provider == "stepfun":
         return bool(os.environ.get("STEPFUN_API_KEY"))
     if provider == "volcengine":
@@ -1133,6 +1146,7 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
         if outage_reported or client_closed.is_set():
             return
         outage_reported = True
+        _log(f"Gemini 连接失败：{type(exc).__name__}: {exc}")
         await _send_json(client, _provider_error_event("gemini", exc))
 
     reader_task = asyncio.create_task(read_client())
@@ -1464,6 +1478,262 @@ async def _run_pumps(client, upstream, pump_up, pump_down, close_message=None):
             pass
 
 
+async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
+    asr = await speech_asr.StreamingASR.connect(session_id)
+    request_queue: asyncio.Queue[dict] = asyncio.Queue(maxsize=8)
+    client_closed = asyncio.Event()
+    response_finish_lock = asyncio.Lock()
+    current_response: dict | None = None
+    speech_active = False
+    seen_utterances: set[tuple] = set()
+    vad_threshold = max(
+        100, int(os.environ.get("LING_GEMINI_PCM_VAD_THRESHOLD", "500"))
+    )
+
+    async def finish_response(token: dict) -> None:
+        nonlocal current_response
+        async with response_finish_lock:
+            if token.get("done"):
+                return
+            token["done"] = True
+            if current_response is token:
+                current_response = None
+        await _send_json(
+            client,
+            {"type": "response.done", "response": {"id": token["id"]}},
+        )
+
+    async def cancel_response() -> None:
+        token = current_response
+        if token is None:
+            return
+        token["cancelled"] = True
+        await finish_response(token)
+
+    async def queue_response(*, prompt: str | None = None) -> None:
+        await request_queue.put(
+            {
+                "history": engine.get_session_history(session_id),
+                "prompt": prompt,
+            }
+        )
+
+    def pcm_rms(pcm: bytes) -> float:
+        samples = array("h")
+        samples.frombytes(pcm)
+        if sys.byteorder != "little":
+            samples.byteswap()
+        if not samples:
+            return 0.0
+        return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
+
+    async def read_client() -> None:
+        nonlocal speech_active
+        try:
+            while True:
+                raw = await client.receive_text()
+                try:
+                    event = json.loads(raw)
+                except (TypeError, ValueError):
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                event_type = event.get("type")
+                if event_type == "input_audio_buffer.append":
+                    try:
+                        pcm = _decode_base64(event.get("audio"), 2)
+                    except ValueError:
+                        continue
+                    if not speech_active and pcm_rms(pcm) >= vad_threshold:
+                        speech_active = True
+                        await _send_json(
+                            client, {"type": "input_audio_buffer.speech_started"}
+                        )
+                        await cancel_response()
+                    await asr.send_audio(pcm)
+                elif event_type == "response.cancel":
+                    await cancel_response()
+                elif event_type == "ling.idle_nudge":
+                    nudge_number = engine.claim_idle_nudge(session_id)
+                    if nudge_number:
+                        await queue_response(
+                            prompt=_idle_instruction(pack, nudge_number)
+                        )
+                elif event_type == "conversation.item.create":
+                    texts = [
+                        part.get("text", "")
+                        for part in (event.get("item") or {}).get("content") or []
+                        if part.get("type") in {"input_text", "text"}
+                        and part.get("text")
+                    ]
+                    text = _normalize_transcript(" ".join(texts))
+                    if text:
+                        await cancel_response()
+                        engine.record_voice_user(session_id, text)
+                        await _send_json(
+                            client,
+                            {
+                                "type": "conversation.item.input_audio_transcription.completed",
+                                "transcript": text,
+                            },
+                        )
+                        await queue_response()
+        except Exception as exc:
+            _log(f"设备实时连接结束：{type(exc).__name__}")
+        finally:
+            client_closed.set()
+
+    async def receive_asr() -> None:
+        nonlocal speech_active
+        async for event in asr.events():
+            for utterance in speech_asr.final_utterances(event):
+                text = _normalize_transcript(str(utterance.get("text") or ""))
+                key = (
+                    utterance.get("start_time"),
+                    utterance.get("end_time"),
+                    text,
+                )
+                if not text or key in seen_utterances:
+                    continue
+                seen_utterances.add(key)
+                if not speech_active:
+                    await _send_json(
+                        client, {"type": "input_audio_buffer.speech_started"}
+                    )
+                speech_active = False
+                await cancel_response()
+                await _send_json(
+                    client, {"type": "input_audio_buffer.speech_stopped"}
+                )
+                engine.record_voice_user(session_id, text)
+                await _send_json(
+                    client,
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "transcript": text,
+                    },
+                )
+                await queue_response()
+        if not client_closed.is_set():
+            raise RuntimeError("Volcengine ASR connection closed")
+
+    async def respond(request: dict) -> None:
+        nonlocal current_response
+        token = {
+            "id": f"gemini_{uuid.uuid4().hex[:12]}",
+            "cancelled": False,
+            "done": False,
+        }
+        current_response = token
+        await _send_json(
+            client,
+            {"type": "response.created", "response": {"id": token["id"]}},
+        )
+        stage = "gemini"
+        try:
+            reply = await asyncio.to_thread(
+                gemini_text.generate_reply,
+                _system_instruction(pack),
+                request["history"],
+                prompt=request.get("prompt"),
+            )
+            if token["cancelled"] or client_closed.is_set():
+                return
+            await _send_json(
+                client,
+                {
+                    "type": "response.audio_transcript.delta",
+                    "response_id": token["id"],
+                    "delta": reply,
+                },
+            )
+            await _send_json(
+                client,
+                {
+                    "type": "response.audio_transcript.done",
+                    "response_id": token["id"],
+                    "transcript": reply,
+                },
+            )
+
+            stage = "tts"
+            pcm = await asyncio.to_thread(child_tts.synthesize_pcm, reply)
+            if token["cancelled"] or client_closed.is_set():
+                return
+            encoded = base64.b64encode(pcm).decode("ascii")
+            for chunk in _gemini_audio_delta_chunks(encoded):
+                if token["cancelled"] or client_closed.is_set():
+                    return
+                await _send_json(
+                    client, {"type": "response.audio.delta", "delta": chunk}
+                )
+
+            state = engine.record_voice_doll(session_id, reply)
+            await finish_response(token)
+            await _send_json(client, {"type": "ling.state", **state})
+        except Exception as exc:
+            _log(f"Gemini 童声网关 {stage} 失败：{type(exc).__name__}: {exc}")
+            if not token["cancelled"] and not client_closed.is_set():
+                await _send_json(
+                    client,
+                    {
+                        "type": "ling.error",
+                        "code": (
+                            "child_tts_failed"
+                            if stage == "tts"
+                            else "provider_connection_failed"
+                        ),
+                        "message": (
+                            "童声合成暂时不可用，请稍后重试"
+                            if stage == "tts"
+                            else "Gemini 暂时不可用，请稍后重试"
+                        ),
+                        "provider": "gemini",
+                        "retryable": True,
+                    },
+                )
+        finally:
+            if not client_closed.is_set():
+                await finish_response(token)
+
+    async def process_responses() -> None:
+        while True:
+            request = await request_queue.get()
+            await respond(request)
+
+    try:
+        await _send_json(client, {"type": "session.created", "provider": "gemini"})
+        if not engine.get_session_history(session_id) and engine.claim_opening(session_id):
+            await queue_response(prompt=_opening_instruction(pack))
+        _log(
+            "已接通 Gemini 童声网关 · "
+            f"model={gemini_text.GEMINI_TEXT_MODEL} · "
+            f"voice={voice_profiles.resolve_voice_profile()['name']} · "
+            f"session={session_id}"
+        )
+
+        reader_task = asyncio.create_task(read_client())
+        asr_task = asyncio.create_task(receive_asr())
+        response_task = asyncio.create_task(process_responses())
+        tasks = {reader_task, asr_task, response_task}
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            if not task.cancelled() and task.exception() is not None:
+                raise task.exception()
+    finally:
+        client_closed.set()
+        for task in locals().get("tasks", set()):
+            if not task.done():
+                task.cancel()
+        if "tasks" in locals():
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await asr.close()
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+
 async def bridge(
     client,
     session_id: str,
@@ -1477,7 +1747,7 @@ async def bridge(
         await _send_json(client, {"type": "ling.error", "message": "不支持的实时模型"})
         await client.close()
         return
-    if provider == "gemini":
+    if provider == "gemini" and not GEMINI_PCM_CHILD_TTS:
         await _send_json(
             client,
             {
@@ -1518,7 +1788,9 @@ async def bridge(
     try:
         if provider == "volcengine":
             raise RuntimeError("Volcengine uses the ByteRTC REST control plane")
-        if provider == "minicpm":
+        if provider == "gemini":
+            await _bridge_gemini_child_pcm(client, session_id, session["pack"])
+        elif provider == "minicpm":
             await _bridge_minicpm(client, session_id, session["pack"], video)
         else:
             await _bridge_stepfun(client, session_id, session["pack"])

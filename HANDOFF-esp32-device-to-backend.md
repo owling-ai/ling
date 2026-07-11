@@ -4,11 +4,19 @@
 来源：ESP32-S3 固件调试会话（Claude Code，项目 `~/Downloads/esp32s3_audio_llm`）
 读者：在 `~/workspace/ling` 工作的 Codex / 后端维护者
 
-> 2026-07-11 后续变更：产品已禁止 Gemini Live 原声音频。本文记录的 `provider=gemini` PCM WebSocket 现返回 `rtc_transport_required`，设备必须迁移到 ByteRTC 原生 SDK、独立流式 TTS 或 Device Gateway 才能获得默认童声。
+> 2026-07-11 23:10 后续变更：本页原待办已经由服务端 PCM 童声网关处理。`provider=gemini` 现使用火山独立流式 ASR、Gemini 标准文本模型和默认“小晴天”24 kHz PCM，不再返回 `rtc_transport_required`，也不连接 Gemini Live 原声音频。以下故障记录保留作历史依据。
 
-## TL;DR
+## 当前结论
 
-设备端断线自愈、打断、打招呼静音已全部实现并验证工作。剩余四个问题都在后端（`backend/`，跑在本机 8888 端口），按优先级：
+- 现有固件的 `POST /api/session/start` 与原 WebSocket URL 不变；无需刷机或传 `voice_profile`。
+- 后端入口为 `backend/realtime.py::_bridge_gemini_child_pcm`，ASR、文本 LLM、TTS 分别在 `speech_asr.py`、`gemini_text.py`、`child_tts.py`。
+- 复用同一 `session_id` 会读取 SQLite 文本历史，并通过 `claim_opening` 避免重复欢迎。
+- `response.cancel` 会立即停止后续 PCM 下发；每个响应仍保证 `response.done`。
+- 真实协议回环已验证 16 kHz 上行、正确 ASR、Gemini 文本回复和 24 kHz“小晴天”下行；ASR 判停到首个完整 TTS 音频帧约 `2.54s`。
+
+## 原 TL;DR（历史）
+
+设备端断线自愈、打断、打招呼静音已全部实现并验证工作。当时剩余四个问题都在后端（`backend/`，跑在本机 8888 端口），按优先级：
 
 1. **重连后会话上下文丢失** —— 设备复用 session_id 重连后，模型像新对话一样重新打招呼/自我介绍（用户实际听感："又重说了"）
 2. **Gemini Live 上游连接不稳定** —— 这是设备频繁断线的直接诱因
@@ -22,7 +30,7 @@
 - 协议：HTTP `POST /api/session/start` → `WS /api/realtime/ws?session_id=X&provider=gemini`，OpenAI Realtime 风格 JSON 事件，音频 Base64 PCM
 - 设备串口实时日志：`~/Downloads/esp32s3_audio_llm/serial_capture.log`（后台 logger 持续写入，带本地时间戳）
 
-## 已实证的事实（都有日志佐证）
+## 当时已实证的事实（历史，现已由 PCM 网关取代）
 
 ### 1. 后端每次 WS 连接建立都自动推 opening（打招呼）
 

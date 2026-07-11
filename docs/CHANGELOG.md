@@ -2,8 +2,9 @@
 
 ## 2026-07-11
 
+- 为现有 ESP32 PCM WebSocket 上线童声 Device Gateway：火山流式 ASR → Gemini 标准文本模型 → `seed-tts-2.0` 默认“小晴天”24 kHz PCM；保持原固件事件契约且不使用 Gemini Live 成人音频。
 - 将 Gemini 童声收敛为调试台唯一的 Gemini 入口；RTC/硬件客户端省略音色参数时由服务端默认使用“小晴天”。
-- 禁用 Gemini Live 原声音频路由；旧 PCM WebSocket 传 `provider=gemini` 时返回 `rtc_transport_required`，不再输出成人声。
+- 禁用 Gemini Live 原声音频路由；旧 PCM WebSocket 曾先以 `rtc_transport_required` 失败关闭，随后由同日新增的童声 Device Gateway 取代。
 - 修复 ESP32 复用 `session_id` 重连后的 Gemini 上下文丢失：持久化业务会话、resumption handle 和文本历史，重连不再重复 opening。
 - Gemini 上游连接失败改为设备 WebSocket 内退避重试，并补充 `response.cancel` 本地收尾、音频帧上限和泵任务清理。
 - 加入孩子端先扫、家长端后扫同一二维码的黑客松绑定闭环，并区分 App Demo 绑定与生产账户、硬件鉴权。
