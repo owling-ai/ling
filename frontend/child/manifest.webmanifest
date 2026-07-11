@@ -1,0 +1,26 @@
+{
+  "name": "灵灵的窗口",
+  "short_name": "灵灵",
+  "description": "看看灵灵此刻的生活，收藏共同经历留下的信物。",
+  "id": "/child",
+  "start_url": "/child",
+  "scope": "/child",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F2F2EF",
+  "theme_color": "#5D7FA6",
+  "icons": [
+    {
+      "src": "./icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
