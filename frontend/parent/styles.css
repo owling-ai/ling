@@ -319,6 +319,121 @@ html:not(.app-ready) .app-shell {
   margin-top: auto;
 }
 
+.binding-panel {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgb(255 255 255 / 82%);
+}
+
+.binding-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.binding-heading h2 {
+  font-size: 17px;
+}
+
+.binding-heading p {
+  margin-top: 2px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
+.binding-step {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--mist-blue);
+  color: #fff;
+  font-weight: 700;
+}
+
+.binding-scan-button {
+  gap: 9px;
+}
+
+.binding-scan-button svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.binding-camera {
+  position: relative;
+  width: 100%;
+  margin-top: 14px;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  border-radius: 6px;
+  background: #171822;
+}
+
+.binding-camera video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scan-frame {
+  position: absolute;
+  width: min(62%, 190px);
+  aspect-ratio: 1;
+  top: 50%;
+  left: 50%;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  box-shadow: 0 0 0 999px rgb(23 24 34 / 38%);
+  transform: translate(-50%, -50%);
+}
+
+.binding-code-form {
+  margin-top: 14px;
+}
+
+.binding-code-form label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.binding-code-form > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.binding-code-form input {
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.binding-code-form .secondary-button {
+  padding: 0 16px;
+}
+
+.binding-status {
+  min-height: 20px;
+  margin-top: 10px;
+  color: var(--text-soft);
+  font-size: 13px;
+}
+
 .setup-list {
   overflow: hidden;
   border: 1px solid var(--line);

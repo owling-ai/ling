@@ -85,6 +85,7 @@ test("service worker activation only removes obsolete parent shell caches", asyn
     "ling-parent-shell-v4",
     "ling-parent-shell-v5",
     "ling-parent-shell-v6",
+    "ling-parent-shell-v7",
   ]);
   assert.equal(state.claims, 1);
 });
@@ -265,13 +266,23 @@ test("visual system keeps the block-and-night-light direction explicit", async (
   assert.match(styles, /touch-action:\s*manipulation/);
 });
 
-test("welcome flow appears once and has deterministic replay controls", async () => {
+test("welcome flow requires the two-app binding and keeps deterministic replay controls", async () => {
   const [html, app] = await Promise.all([read("index.html"), read("app.mjs")]);
 
   assert.match(html, /id="welcome-view"/);
   assert.match(html, /id="start-app"/);
-  assert.match(html, /一起守护这段成长/);
+  assert.match(html, /连接孩子和灵灵/);
+  assert.match(html, /id="scan-binding-code"/);
+  assert.match(html, /id="binding-video"[^>]+playsinline/);
+  assert.match(html, /\/assets\/jsQR\.js/);
+  assert.match(html, /输入 Demo 码/);
   assert.match(app, /const WELCOME_KEY = "ling-parent-welcome-v1"/);
+  assert.match(app, /const BINDING_KEY = "ling-parent-binding-v1"/);
+  assert.match(app, /new BarcodeDetector\(\{ formats: \["qr_code"\] \}\)/);
+  assert.match(app, /globalThis\.jsQR\(pixels\.data/);
+  assert.match(app, /api\.bindParent\(normalized, installationId\(\)\)/);
+  assert.match(app, /url\.searchParams\.get\("binding"\) !== "reset"/);
+  assert.match(app, /storageRemove\(BINDING_KEY\)/);
   assert.match(app, /new URLSearchParams\(window\.location\.search\)\.get\("welcome"\)/);
   assert.match(app, /storageSet\(WELCOME_KEY, "complete"\)/);
   assert.match(app, /data-show-welcome/);
@@ -311,6 +322,7 @@ test("PWA manifest, service worker, and mobile accessibility constraints are pre
   assert.deepEqual(manifest.icons.map((icon) => icon.sizes), ["192x192", "512x512"]);
   assert.match(serviceWorker, /icon-192\.png/);
   assert.match(serviceWorker, /manifest\.webmanifest/);
+  assert.match(serviceWorker, /ling-parent-shell-v8/);
   assert.match(styles, /env\(safe-area-inset-bottom/);
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /min-height:\s*44px/);

@@ -35,6 +35,25 @@ test("child API uses only the five allowlisted business endpoints", async () => 
   assert.equal(calls[4].init.body, JSON.stringify({ collected: true }));
 });
 
+test("binding API submits the child installation and polls by that installation", async () => {
+  const calls = [];
+  const api = createChildApi(async (url, init = {}) => {
+    calls.push({ url, init });
+    return jsonResponse({ status: "pending" });
+  });
+
+  await api.childScan("ling://bind/LING-DEMO-2026", "child_installation-1");
+  await api.bindingStatus("child_installation-1");
+
+  assert.equal(calls[0].url, "/api/bindings/child-scan");
+  assert.equal(calls[0].init.method, "POST");
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    qr_token: "ling://bind/LING-DEMO-2026",
+    installation_id: "child_installation-1",
+  });
+  assert.equal(calls[1].url, "/api/bindings/status?installation_id=child_installation-1");
+});
+
 test("child API surfaces a display-safe error without leaking a response body", async () => {
   const api = createChildApi(async () => jsonResponse({ detail: "provider secret stack" }, 503));
 

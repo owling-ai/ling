@@ -1,5 +1,14 @@
 import { childApi, loadPocketAfterMutation, pollMomentUntilSettled } from "./api.mjs";
 import {
+  cameraQrIsSupported,
+  childBindingIsActive,
+  forgetActiveChildBinding,
+  getOrCreateInstallationId,
+  normalizeQrToken,
+  rememberActiveChildBinding,
+  startCameraQrScanner,
+} from "./scanner.mjs";
+import {
   beginPocketChange,
   childRoute,
   feedView,
@@ -21,6 +30,7 @@ const toast = document.querySelector("#toast");
 const themeMeta = document.querySelector('meta[name="theme-color"]');
 const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 const WELCOME_KEY = "ling-child-welcome-v1";
+const BINDING_POLL_MS = 1200;
 
 const state = {
   world: null,
@@ -36,6 +46,14 @@ const state = {
   showingWelcome: false,
   soundEnabled: false,
   toastTimer: null,
+  bindingGate: true,
+  bindingVersion: 0,
+  bindingPollTimer: null,
+  bindingPollController: null,
+  bindingSubmitController: null,
+  bindingScannerStop: null,
+  bindingSubmitting: false,
+  installationId: null,
 };
 
 function escapeHtml(value) {
@@ -120,6 +138,20 @@ function rememberWelcome() {
   }
 }
 
+function resetLocalDemoState() {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get("binding") !== "reset") return false;
+  forgetActiveChildBinding();
+  try {
+    window.localStorage.removeItem(WELCOME_KEY);
+  } catch {
+    // The reset link still opens the scanner when storage is unavailable.
+  }
+  url.searchParams.delete("binding");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  return true;
+}
+
 function showToast(message) {
   if (state.toastTimer !== null) window.clearTimeout(state.toastTimer);
   toast.textContent = message;
@@ -129,6 +161,239 @@ function showToast(message) {
     toast.textContent = "";
     state.toastTimer = null;
   }, 2600);
+}
+
+function stopBindingScanner() {
+  state.bindingScannerStop?.();
+  state.bindingScannerStop = null;
+}
+
+function stopBindingPolling() {
+  if (state.bindingPollTimer !== null) window.clearTimeout(state.bindingPollTimer);
+  state.bindingPollTimer = null;
+  state.bindingPollController?.abort();
+  state.bindingPollController = null;
+}
+
+function stopBindingRuntime() {
+  stopBindingScanner();
+  stopBindingPolling();
+  state.bindingSubmitController?.abort();
+  state.bindingSubmitController = null;
+}
+
+function prepareBindingView() {
+  stopBindingRuntime();
+  state.bindingGate = true;
+  state.showingWelcome = false;
+  state.bindingSubmitting = false;
+  navigation.hidden = true;
+  document.body.dataset.route = "binding";
+  document.body.dataset.worldMode = "day";
+  themeMeta.content = "#F2F2EF";
+  return ++state.bindingVersion;
+}
+
+function setScannerState(cameraState, message) {
+  const scanner = view.querySelector("[data-binding-scanner]");
+  const status = view.querySelector("[data-scanner-status]");
+  if (scanner) scanner.dataset.cameraState = cameraState;
+  if (status) status.textContent = message;
+}
+
+async function startBindingCamera(version) {
+  if (!cameraQrIsSupported()) {
+    setScannerState("unavailable", "这台手机暂时不能直接扫码，请输入 Demo 码");
+    return;
+  }
+
+  const video = view.querySelector("[data-binding-video]");
+  if (!video) return;
+  setScannerState("starting", "正在打开相机");
+
+  try {
+    const stop = await startCameraQrScanner(video, {
+      onResult: (token) => submitChildBinding(token),
+      onError: () => setScannerState("ready", "把二维码放进方框里"),
+    });
+    if (version !== state.bindingVersion || !state.bindingGate || state.bindingSubmitting) {
+      stop();
+      return;
+    }
+    state.bindingScannerStop = stop;
+    setScannerState("ready", "把二维码放进方框里");
+  } catch {
+    if (version !== state.bindingVersion) return;
+    setScannerState("unavailable", "相机没有打开，请输入 Demo 码");
+  }
+}
+
+function renderBindingScan(errorMessage = "") {
+  const version = prepareBindingView();
+  commit(`
+    <section class="binding-view binding-scan-view" aria-labelledby="binding-title">
+      <header class="binding-copy">
+        <span class="binding-step">第 1 步</span>
+        <h1 id="binding-title" tabindex="-1">先认识一下灵灵</h1>
+        <p>扫描玩偶卡片上的二维码</p>
+      </header>
+
+      <div class="binding-scanner" data-binding-scanner data-camera-state="starting">
+        <video class="binding-video" data-binding-video playsinline muted aria-label="二维码扫描相机"></video>
+        <div class="binding-scan-guide" aria-hidden="true"><i></i><i></i><i></i><i></i><span></span></div>
+        <p class="binding-scanner-status" data-scanner-status aria-live="polite">正在打开相机</p>
+        <button class="binding-camera-retry" type="button" data-action="retry-binding-camera">重新打开相机</button>
+      </div>
+
+      <form class="binding-code-form" data-binding-code-form>
+        <label for="binding-code">Demo 码</label>
+        <div>
+          <input id="binding-code" name="qr-token" type="text" inputmode="text"
+            autocomplete="off" autocapitalize="characters" spellcheck="false"
+            placeholder="LING-DEMO-2026" aria-describedby="binding-form-message">
+          <button type="submit">继续</button>
+        </div>
+        <p id="binding-form-message" class="binding-form-message" aria-live="polite">${escapeHtml(errorMessage)}</p>
+      </form>
+    </section>`, "绑定灵灵");
+  startBindingCamera(version);
+}
+
+function updateBindingWaitStatus(message) {
+  const status = view.querySelector("[data-binding-wait-status]");
+  if (status) status.textContent = message;
+}
+
+function scheduleBindingPoll(version, delay = BINDING_POLL_MS) {
+  if (version !== state.bindingVersion || !state.bindingGate) return;
+  if (state.bindingPollTimer !== null) window.clearTimeout(state.bindingPollTimer);
+  state.bindingPollTimer = window.setTimeout(() => pollBindingStatus(version), delay);
+}
+
+async function pollBindingStatus(version) {
+  if (version !== state.bindingVersion || !state.bindingGate) return;
+  state.bindingPollTimer = null;
+  const controller = new AbortController();
+  state.bindingPollController = controller;
+
+  try {
+    const binding = await childApi.bindingStatus(state.installationId, { signal: controller.signal });
+    if (version !== state.bindingVersion) return;
+    if (binding.status === "active") {
+      completeChildBinding();
+      return;
+    }
+    updateBindingWaitStatus("正在等家长扫码...");
+  } catch (error) {
+    if (error.name === "AbortError" || version !== state.bindingVersion) return;
+    if (error.status === 404) {
+      renderBindingScan("刚才的配对已经结束，请重新扫码");
+      return;
+    }
+    updateBindingWaitStatus("网络有点慢，正在继续等待...");
+  } finally {
+    if (state.bindingPollController === controller) state.bindingPollController = null;
+  }
+  scheduleBindingPoll(version);
+}
+
+function renderBindingWaiting(binding = {}) {
+  const version = prepareBindingView();
+  const dollName = escapeHtml(binding.doll_name || "灵灵");
+  commit(`
+    <section class="binding-view binding-wait-view" aria-labelledby="binding-wait-title">
+      <header class="binding-copy">
+        <span class="binding-step">第 2 步</span>
+        <h1 id="binding-wait-title" tabindex="-1">我准备好啦</h1>
+        <p>等家长扫描同一张卡片</p>
+      </header>
+
+      <div class="binding-pair-scene" role="img" aria-label="${dollName}正在等待家长加入">
+        <span class="binding-phone binding-phone-child"><i></i></span>
+        <span class="binding-pair-line"><i></i><i></i><i></i></span>
+        <span class="binding-toy"><i class="binding-toy-ear left"></i><i class="binding-toy-ear right"></i><b>灵</b></span>
+        <span class="binding-pair-line reverse"><i></i><i></i><i></i></span>
+        <span class="binding-phone binding-phone-parent"><i></i></span>
+      </div>
+
+      <div class="binding-wait-footer">
+        <p class="binding-wait-status" data-binding-wait-status aria-live="polite">正在等家长扫码...</p>
+        <button class="binding-text-button" type="button" data-action="restart-binding">重新扫码</button>
+      </div>
+    </section>`, "等待家长");
+  scheduleBindingPoll(version, 350);
+}
+
+function launchChildExperience() {
+  stopBindingRuntime();
+  state.bindingGate = false;
+  if (shouldShowWelcome(window.location.search, welcomeWasSeen())) renderWelcome();
+  else route();
+}
+
+function completeChildBinding() {
+  rememberActiveChildBinding();
+  announce("绑定成功，欢迎来到灵灵的世界。");
+  launchChildExperience();
+}
+
+async function submitChildBinding(rawToken) {
+  const token = normalizeQrToken(rawToken);
+  if (!token || state.bindingSubmitting) {
+    if (!token) {
+      const message = view.querySelector(".binding-form-message");
+      if (message) message.textContent = "请输入卡片上的 Demo 码";
+    }
+    return;
+  }
+
+  state.bindingSubmitting = true;
+  stopBindingScanner();
+  const version = state.bindingVersion;
+  const controller = new AbortController();
+  state.bindingSubmitController = controller;
+  setScannerState("submitting", "正在认识灵灵...");
+  view.querySelectorAll(".binding-code-form input, .binding-code-form button").forEach((control) => {
+    control.disabled = true;
+  });
+
+  try {
+    const binding = await childApi.childScan(token, state.installationId, { signal: controller.signal });
+    if (version !== state.bindingVersion) return;
+    if (binding.status === "active") completeChildBinding();
+    else renderBindingWaiting(binding);
+  } catch (error) {
+    if (error.name === "AbortError" || version !== state.bindingVersion) return;
+    renderBindingScan(error.status === 404
+      ? "没有找到这个灵灵码，请检查后再试"
+      : "刚才没有扫成功，请再试一次");
+  } finally {
+    if (state.bindingSubmitController === controller) state.bindingSubmitController = null;
+    state.bindingSubmitting = false;
+  }
+}
+
+async function beginBindingGate() {
+  state.installationId = getOrCreateInstallationId();
+  if (resetLocalDemoState()) {
+    renderBindingScan();
+    return;
+  }
+  if (childBindingIsActive()) {
+    launchChildExperience();
+    return;
+  }
+
+  prepareBindingView();
+  renderLoading("正在确认灵灵的卡片");
+  try {
+    const binding = await childApi.bindingStatus(state.installationId);
+    if (binding.status === "active") completeChildBinding();
+    else if (["pending", "waiting_parent"].includes(binding.status)) renderBindingWaiting(binding);
+    else renderBindingScan();
+  } catch (error) {
+    renderBindingScan(error.status === 404 ? "" : "暂时没有连上，可以直接扫码重试");
+  }
 }
 
 function renderWelcome() {
@@ -670,6 +935,11 @@ view.addEventListener("click", (event) => {
   const action = event.target.closest("[data-action]");
   if (!action) return;
 
+  if (action.dataset.action === "retry-binding-camera") {
+    stopBindingScanner();
+    startBindingCamera(state.bindingVersion);
+  }
+  if (action.dataset.action === "restart-binding") renderBindingScan();
   if (action.dataset.action === "enter-world") enterWorld();
   if (action.dataset.action === "toggle-sound") toggleWorldSound(action);
   if (action.dataset.action === "meet-ling") {
@@ -696,6 +966,13 @@ view.addEventListener("click", (event) => {
     startDetailPoll(state.currentMoment);
   }
   if (action.dataset.action === "toggle-pocket") togglePocket();
+});
+
+view.addEventListener("submit", (event) => {
+  const form = event.target.closest("[data-binding-code-form]");
+  if (!form) return;
+  event.preventDefault();
+  submitChildBinding(new FormData(form).get("qr-token"));
 });
 
 view.addEventListener("error", (event) => {
@@ -726,9 +1003,10 @@ view.addEventListener("error", (event) => {
 }, true);
 
 window.addEventListener("hashchange", () => {
-  if (!state.showingWelcome) route();
+  if (!state.showingWelcome && !state.bindingGate) route();
 });
 window.addEventListener("pagehide", () => {
+  stopBindingRuntime();
   clearWorldRefresh();
   stopPollers();
   if (state.toastTimer !== null) window.clearTimeout(state.toastTimer);
@@ -741,5 +1019,4 @@ if ("serviceWorker" in navigator) {
 if (!window.location.hash) {
   window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#now`);
 }
-if (shouldShowWelcome(window.location.search, welcomeWasSeen())) renderWelcome();
-else route();
+beginBindingGate();

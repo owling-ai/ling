@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -20,6 +20,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from . import (  # noqa: E402
+    bindings,
     db,
     engine,
     experience,
@@ -190,6 +191,7 @@ os.makedirs(GENERATED_MEDIA, exist_ok=True)
 @app.on_event("startup")
 def startup():
     db.init_db()
+    bindings.ensure_demo_qr_registered()
     media.default_catalog(reload=True)
     experience_service = experience.default_service(reload=True)
     if not seed.is_seeded():
@@ -224,6 +226,43 @@ def shutdown():
 
 # ---------------------------------------------------------------- 基本状态
 
+
+class BindingScanBody(BaseModel):
+    qr_token: str
+    installation_id: str
+
+
+def _binding_result(operation, *args):
+    try:
+        return operation(*args)
+    except bindings.BindingError as exc:
+        raise HTTPException(exc.status_code, exc.detail) from exc
+
+
+@app.post("/api/bindings/child-scan")
+def binding_child_scan(body: BindingScanBody):
+    return _binding_result(bindings.child_scan, body.qr_token, body.installation_id)
+
+
+@app.post("/api/bindings/parent-scan")
+def binding_parent_scan(body: BindingScanBody):
+    return _binding_result(bindings.parent_scan, body.qr_token, body.installation_id)
+
+
+@app.get("/api/bindings/status")
+def binding_status(installation_id: str):
+    return _binding_result(bindings.status, installation_id)
+
+
+@app.get("/api/demo/binding-qr.png")
+def demo_binding_qr():
+    return Response(
+        content=bindings.demo_qr_png(),
+        media_type="image/png",
+        headers={"Content-Disposition": 'inline; filename="ling-demo-binding.png"'},
+    )
+
+
 @app.get("/api/state")
 def state():
     child = db.q1("SELECT * FROM children WHERE id=?", (CHILD_ID,))
@@ -234,6 +273,10 @@ def state():
         "doll": memory.get_card(CHILD_ID, "doll"),
         "taboo": db.jloads(child["taboo_json"]) if child else [],
         "agenda_ready": agenda is not None and agenda["status"] == "ready",
+        "binding_demo": {
+            "short_code": bindings.demo_short_code(),
+            "qr_url": "/api/demo/binding-qr.png",
+        },
         "llm": {"worker_available": llm.worker_live()},
         "realtime": realtime.info(),
     }
@@ -665,6 +708,11 @@ def admin_media_tick():
 @app.post("/api/admin/reseed")
 def admin_reseed():
     return seed.seed()
+
+
+@app.post("/api/admin/reset-binding")
+def admin_reset_binding():
+    return bindings.reset_demo_binding()
 
 
 # ---------------------------------------------------------------- 前端

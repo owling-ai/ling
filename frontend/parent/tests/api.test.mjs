@@ -90,3 +90,38 @@ test("normalizes browser network failures without leaking English internals", as
     (error) => error.message === "暂时无法连接灵灵，请检查网络后重试。",
   );
 });
+
+test("submits the parent scan with the installation identity", async () => {
+  const requests = [];
+  const parentApi = createParentApi(async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ status: "active", child_name: "悠悠" }),
+    };
+  });
+
+  const result = await parentApi.bindParent("ling://bind/demo", "parent-installation");
+
+  assert.equal(result.status, "active");
+  assert.equal(requests[0].url, "/api/bindings/parent-scan");
+  assert.equal(requests[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(requests[0].options.body), {
+    qr_token: "ling://bind/demo",
+    installation_id: "parent-installation",
+  });
+});
+
+test("keeps the child-first backend message for an early parent scan", async () => {
+  const parentApi = createParentApi(async () => ({
+    ok: false,
+    status: 409,
+    json: async () => ({ detail: "请先让孩子端扫描同一个二维码" }),
+  }));
+
+  await assert.rejects(
+    () => parentApi.bindParent("demo", "parent-installation"),
+    /请先让孩子端扫描/,
+  );
+});

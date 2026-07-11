@@ -30,6 +30,7 @@ test("PWA shell exposes only the three child tabs and an announcement region", a
 
   assert.match(html, /rel="manifest" href="\.\/manifest\.webmanifest"/);
   assert.match(html, /<script type="module" src="\.\/app\.mjs"><\/script>/);
+  assert.match(html, /<script src="\/assets\/jsQR\.js"><\/script>[\s\S]*<script type="module" src="\.\/app\.mjs">/);
   assert.match(html, /name="application-name" content="灵灵的窗口"/);
   assert.match(html, /name="mobile-web-app-capable" content="yes"/);
   assert.match(html, /name="apple-mobile-web-app-title" content="灵灵"/);
@@ -40,6 +41,22 @@ test("PWA shell exposes only the three child tabs and an announcement region", a
   assert.match(html, /id="announcer"[^>]*aria-live="polite"/);
   assert.doesNotMatch(html, /class="app-header"/);
   assert.doesNotMatch(html, /聊天|掌握度|家长控制台|管理|provider/i);
+});
+
+test("unbound children scan first, wait for a parent, then enter the existing app", async () => {
+  const source = await readText("app.mjs");
+
+  assert.match(source, /beginBindingGate\(\);/);
+  assert.match(source, /url\.searchParams\.get\("binding"\) !== "reset"/);
+  assert.match(source, /forgetActiveChildBinding\(\);/);
+  assert.match(source, /localStorage\.removeItem\(WELCOME_KEY\)/);
+  assert.match(source, /url\.searchParams\.delete\("binding"\)/);
+  assert.match(source, /childApi\.childScan\(token, state\.installationId/);
+  assert.match(source, /childApi\.bindingStatus\(state\.installationId/);
+  assert.match(source, /扫描玩偶卡片上的二维码/);
+  assert.match(source, /等家长扫描同一张卡片/);
+  assert.match(source, /rememberActiveChildBinding\(\);[\s\S]*launchChildExperience\(\);/);
+  assert.match(source, /if \(!state\.showingWelcome && !state\.bindingGate\) route\(\);/);
 });
 
 test("welcome is a first-run hatching screen with explicit demo overrides", async () => {
@@ -55,7 +72,7 @@ test("welcome is a first-run hatching screen with explicit demo overrides", asyn
 });
 
 test("child source never requests forbidden memory or provider endpoints", async () => {
-  const source = await Promise.all(["api.mjs", "model.mjs", "app.mjs"].map(readText));
+  const source = await Promise.all(["api.mjs", "model.mjs", "scanner.mjs", "app.mjs"].map(readText));
   const joined = source.join("\n");
 
   for (const forbidden of ["/api/facts", "/api/diary", "/api/mastery", "/api/report", "/api/volcengine", "/api/admin"] ) {
@@ -197,14 +214,17 @@ test("service worker caches only the child shell and does not cache business API
     "/child/styles.css",
     "/child/app.mjs",
     "/child/api.mjs",
+    "/child/scanner.mjs",
     "/child/model.mjs",
     "/child/manifest.webmanifest",
     "/child/icon-192.png",
     "/child/icon-512.png",
+    "/assets/jsQR.js",
   ]) {
     assert.ok(source.includes(`"${path}"`), `expected absolute shell path ${path}`);
   }
-  assert.match(source, /CACHE_NAME\s*=\s*`\$\{CACHE_PREFIX\}-v7`/);
+  assert.match(source, /CACHE_NAME\s*=\s*`\$\{CACHE_PREFIX\}-v8`/);
+  assert.match(source, /url\.pathname !== "\/assets\/jsQR\.js"/);
   assert.match(source, /new Request\([\s\S]*cache:\s*"reload"/);
   assert.match(source, /pathname\.startsWith\("\/api\/"\)/);
   assert.doesNotMatch(source, /cache\.put\([^\n]*\/api\//);

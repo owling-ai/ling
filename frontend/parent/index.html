@@ -28,8 +28,8 @@
     <div class="welcome-content">
       <div class="welcome-copy">
         <p class="eyebrow">LING FAMILY</p>
-        <h1 id="welcome-title">一起守护这段成长</h1>
-        <p>先安排好边界，再把相处留给孩子和灵灵</p>
+        <h1 id="welcome-title">连接孩子和灵灵</h1>
+        <p>孩子端扫码后，再用成长手册扫描同一张二维码</p>
       </div>
 
       <div class="block-scene" aria-hidden="true">
@@ -49,7 +49,33 @@
       </div>
 
       <div class="welcome-actions">
-        <div class="setup-list" aria-label="监护设置摘要">
+        <section id="parent-binding" class="binding-panel" aria-labelledby="binding-title">
+          <div class="binding-heading">
+            <span class="binding-step" aria-hidden="true">2</span>
+            <div>
+              <h2 id="binding-title">家长确认</h2>
+              <p>请扫描玩偶附带的二维码</p>
+            </div>
+          </div>
+          <div id="binding-camera" class="binding-camera" hidden>
+            <video id="binding-video" playsinline muted aria-label="二维码扫描画面"></video>
+            <span class="scan-frame" aria-hidden="true"></span>
+          </div>
+          <button id="scan-binding-code" class="primary-button binding-scan-button" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M8 9h8v6H8z"></path></svg>
+            <span>扫描灵灵二维码</span>
+          </button>
+          <form id="binding-code-form" class="binding-code-form">
+            <label for="binding-code">输入 Demo 码</label>
+            <div>
+              <input id="binding-code" name="code" placeholder="LING-DEMO-2026" autocomplete="off" autocapitalize="none" spellcheck="false" required>
+              <button class="secondary-button" type="submit">确认</button>
+            </div>
+          </form>
+          <p id="binding-status" class="binding-status" role="status" aria-live="polite">等待家长扫码</p>
+        </section>
+
+        <div id="binding-success" class="setup-list" aria-label="监护设置摘要" hidden>
           <div class="setup-row">
             <span class="setup-icon guardian-icon" aria-hidden="true"></span>
             <span>监护人身份</span>
@@ -61,8 +87,8 @@
             <strong>悠悠</strong>
           </div>
         </div>
-        <button id="start-app" class="primary-button" type="button">进入成长手册</button>
-        <p class="welcome-footnote">这些设置只帮助灵灵守住边界，不会打断孩子正在发生的相处。</p>
+        <button id="start-app" class="primary-button" type="button" hidden>进入成长手册</button>
+        <p class="welcome-footnote">绑定完成后，两端会看到同一个灵灵。</p>
       </div>
     </div>
   </section>
@@ -146,6 +172,7 @@
 
   <p id="status-announcer" class="sr-only" aria-live="polite"></p>
   <noscript>请启用 JavaScript 查看家长端成长手册。</noscript>
+  <script src="/assets/jsQR.js"></script>
   <script type="module" src="/parent/app.mjs"></script>
 </body>
 </html>
