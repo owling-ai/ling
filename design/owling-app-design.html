@@ -1,0 +1,685 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="灵偶 OWLING 孩子端与家长端 App 视觉设计，展示积木白天与夜灯睡前两种模式。">
+  <link rel="icon" href="data:,">
+  <title>灵偶 OWLING | 双端 App 设计</title>
+  <style>
+  /* ================= gallery chrome ================= */
+  :root{
+    color-scheme:light dark;
+    --bg:#F7F7F4; --panel:#FFFFFF; --ink:#232220; --soft:#6F6C66; --faint:#73716B;
+    --line:rgba(35,34,32,.09); --line-2:rgba(35,34,32,.05);
+    --shadow:0 24px 60px -30px rgba(40,36,30,.35);
+    --shadow-sm:0 10px 26px -18px rgba(40,36,30,.3);
+    --sans:"PingFang SC","Hiragino Sans GB","Source Han Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;
+    --round:ui-rounded,"SF Pro Rounded","PingFang SC","Hiragino Maru Gothic ProN",system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#141414; --panel:#1C1C1E; --ink:#EAE8E2; --soft:#A29E96; --faint:#8A877F;
+      --line:rgba(234,232,226,.12); --line-2:rgba(234,232,226,.06);
+      --shadow:0 26px 60px -28px rgba(0,0,0,.75); --shadow-sm:0 12px 26px -18px rgba(0,0,0,.6);}
+  }
+  :root[data-theme="light"]{ --bg:#F7F7F4; --panel:#FFFFFF; --ink:#232220; --soft:#6F6C66; --faint:#73716B;
+    --line:rgba(35,34,32,.09); --line-2:rgba(35,34,32,.05);
+    --shadow:0 24px 60px -30px rgba(40,36,30,.35); --shadow-sm:0 10px 26px -18px rgba(40,36,30,.3);}
+  :root[data-theme="dark"]{ --bg:#141414; --panel:#1C1C1E; --ink:#EAE8E2; --soft:#A29E96; --faint:#8A877F;
+    --line:rgba(234,232,226,.12); --line-2:rgba(234,232,226,.06);
+    --shadow:0 26px 60px -28px rgba(0,0,0,.75); --shadow-sm:0 12px 26px -18px rgba(0,0,0,.6);}
+
+  *{box-sizing:border-box}
+  html,body{margin:0;min-width:320px;background:var(--bg)}
+  .page{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;
+    -webkit-font-smoothing:antialiased;min-height:100vh;overflow-x:hidden}
+  .wrap{width:100%;max-width:1180px;margin:0 auto;padding:0 24px;min-width:0}
+  .top{display:flex;align-items:center;justify-content:space-between;padding:22px 0 0}
+  .kicker{font-family:var(--mono);font-size:.66rem;letter-spacing:0;text-transform:uppercase;color:var(--faint)}
+  .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  .tbtn{font-family:var(--mono);font-size:.68rem;border:1px solid var(--line);background:var(--panel);
+    color:var(--soft);padding:7px 14px;border-radius:100px;cursor:pointer;transition:color .25s,border-color .25s}
+  .tbtn:hover{color:var(--ink);border-color:var(--faint)}
+  .tbtn:focus-visible{outline:2px solid var(--soft);outline-offset:2px}
+
+  header.hd{padding:34px 0 8px;max-width:58ch}
+  h1{font-family:var(--round);font-weight:700;font-size:2.5rem;
+    letter-spacing:0;line-height:1.14;margin:0;text-wrap:balance}
+  .lede{color:var(--soft);font-size:.98rem;margin-top:14px;overflow-wrap:anywhere;line-break:anywhere}
+  .lede b{color:var(--ink);font-weight:600}
+  .bridge{display:flex;gap:26px;flex-wrap:wrap;margin-top:22px;max-width:100%}
+  .bridge .pair{display:flex;align-items:center;gap:9px;font-size:.78rem;color:var(--soft);min-width:0}
+  .bridge i{width:26px;height:26px;border-radius:8px;border:1px solid rgba(0,0,0,.07)}
+  .bridge span.arr{color:var(--faint);font-family:var(--mono);font-size:.7rem}
+
+  h2{font-family:var(--round);font-weight:700;font-size:1.35rem;letter-spacing:0;
+    margin:56px 0 6px;line-height:1.2}
+  .secsub{color:var(--soft);font-size:.9rem;max-width:60ch;margin:0 0 26px;overflow-wrap:anywhere;line-break:anywhere}
+
+  .screens{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:26px;min-width:0}
+  .shot{display:flex;flex-direction:column;align-items:center;min-width:0}
+  .shot .cap{width:280px;margin-top:16px}
+  .cap h3{font-family:var(--round);font-size:.95rem;font-weight:700;margin:0}
+  .cap ul{margin:8px 0 0;padding:0;list-style:none}
+  .cap li{font-size:.79rem;color:var(--soft);padding:4px 0 4px 14px;position:relative;overflow-wrap:anywhere;line-break:anywhere}
+  .cap li::before{content:"";position:absolute;left:0;top:.72em;width:5px;height:5px;
+    border-radius:2px;background:var(--faint)}
+  .cap li strong{color:var(--ink);font-weight:600}
+
+  /* ================= phone shell ================= */
+  .phone{width:min(280px,calc(100vw - 48px));flex:none;border-radius:36px;padding:8px;background:#26241F;
+    box-shadow:var(--shadow);position:relative}
+  .phone.night{background:#0E0F16}
+  .screen{border-radius:29px;overflow:hidden;position:relative;display:flex;flex-direction:column;
+    height:584px;font-family:var(--round)}
+  .notch{position:absolute;left:50%;top:8px;transform:translateX(-50%);width:82px;height:21px;
+    border-radius:100px;background:rgba(0,0,0,.85);z-index:6}
+
+  /* day / night / parent UI palettes */
+  .ui-day{ --g:#F2F2EF; --c:#FFFFFF; --k:#34322D; --s:rgba(52,50,45,.70); --f:rgba(52,50,45,.74);
+    --pri:#5D7FA6; --pri-action:#55779E; --onpri:#FFFFFF; --pritint:#E3EAF2; --prink:#3E5E82;
+    --toy-clay:#D89B94; --toy-amber:#D8B15E; --toy-pea:#93AE8F;
+    --amb-bg:#F3E7CC; --amb-ink:#7A5A22; --pea-bg:#E5EDE2; --pea-ink:#47614A;
+    --clay-bg:#F3E1DE; --clay-ink:#7C4A44;
+    background:var(--g);color:var(--k)}
+  .ui-night{ --g:#171822; --c:#1F2130; --k:#E9E7F2; --s:rgba(233,231,242,.6); --f:rgba(233,231,242,.52);
+    --pri:#E4AE58; --pri-action:#E4AE58; --onpri:#2A1F0E; --pritint:#2A2C41; --prink:#C9C4E4;
+    --dusk:#8E8BC0;
+    --amb-bg:#33301F; --amb-ink:#E9C685; --pea-bg:#242B26; --pea-ink:#A9C3A4;
+    --clay-bg:#2E2426; --clay-ink:#D6A49E;
+    background:var(--g);color:var(--k)}
+  .ui-par{ --g:#F5F6F5; --c:#FFFFFF; --k:#26292E; --s:rgba(38,41,46,.67); --f:rgba(38,41,46,.70);
+    --pri:#5D7FA6; --pri-action:#46688F; --onpri:#FFFFFF; --pritint:#E3EAF2; --prink:#38546F;
+    --toy-clay:#D89B94; --toy-amber:#D8B15E; --toy-pea:#93AE8F;
+    --amb-bg:#F7EBD3; --amb-ink:#8A621A; --amb-line:#E4AE58;
+    --pea-bg:#E5EDE2; --pea-ink:#47614A; --clay-bg:#F3E1DE; --clay-ink:#7C4A44;
+    background:var(--g);color:var(--k)}
+
+  /* scenes */
+  .scene{position:relative;flex:none;overflow:hidden}
+  .scene.h-lg{height:300px}.scene.h-md{height:212px}
+  .scene .layer{position:absolute;inset:0}
+  .sc-kite .l1{background:linear-gradient(180deg,#BFD3E0 0%,#D9E0D2 55%,#A8C29D 100%)}
+  .sc-kite .l2{background:radial-gradient(52% 38% at 78% 14%,rgba(250,243,224,.9),transparent 68%),
+    radial-gradient(60% 30% at 16% 96%,rgba(133,160,112,.35),transparent 70%)}
+  .sc-night .l1{background:linear-gradient(180deg,#2B2D4C 0%,#1D1E32 58%,#14151F 100%)}
+  .sc-night .l2{background:radial-gradient(44% 36% at 30% 76%,rgba(240,180,106,.5),transparent 72%),
+    radial-gradient(18% 13% at 78% 20%,rgba(214,220,255,.28),transparent 70%)}
+  .sc-egg .l1{background:linear-gradient(180deg,#EDEAE2 0%,#E4DFD3 100%)}
+  .sc-egg .l2{background:radial-gradient(46% 34% at 50% 20%,rgba(255,252,244,.9),transparent 70%)}
+  .sc-market .l1{background:linear-gradient(180deg,#DCE3D8 0%,#CBD6BF 60%,#B4C4A4 100%)}
+  .sc-market .l2{background:radial-gradient(30% 26% at 26% 38%,rgba(216,155,148,.4),transparent 70%),
+    radial-gradient(26% 22% at 72% 60%,rgba(216,177,94,.42),transparent 70%)}
+  .sc-blocks .l1{background:linear-gradient(180deg,#E9E4DB 0%,#E0D8CA 100%)}
+  .sc-blocks .l2{background:radial-gradient(24% 20% at 24% 32%,rgba(125,163,196,.5),transparent 70%),
+    radial-gradient(24% 20% at 72% 26%,rgba(216,155,148,.46),transparent 70%),
+    radial-gradient(28% 22% at 56% 74%,rgba(216,177,94,.46),transparent 70%)}
+
+  .live{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:.54rem;
+    font-weight:700;letter-spacing:0;color:#fff;background:rgba(16,14,12,.62);
+    padding:4px 9px;border-radius:8px;backdrop-filter:blur(3px)}
+  .live i{width:5px;height:5px;border-radius:50%;background:#FF6B5A;animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion:reduce){.live i{animation:none}}
+  .live-wrap{position:absolute;left:16px;top:40px;z-index:3}
+  .sc-cap{position:absolute;left:16px;right:16px;bottom:14px;z-index:3}
+  .sc-cap.dkink{--si:#333B31;--ss:0 1px 0 rgba(255,255,255,.26)}
+  .sc-cap.ltink{--si:#EFECF7;--ss:0 1px 8px rgba(10,10,20,.5)}
+  .sc-t{font-weight:700;font-size:1.12rem;line-height:1.28;color:var(--si);text-shadow:var(--ss)}
+  .sc-l{margin-top:8px;color:var(--si);opacity:.92;text-shadow:var(--ss)}
+  .sc-l time{display:block;font-family:var(--mono);font-size:.54rem;opacity:.64;letter-spacing:0}
+  .ui-night .sc-l time{color:var(--dusk);opacity:1}
+  .sc-l p{margin:1px 0 0;font-size:.76rem;line-height:1.45}
+  .en{font-weight:inherit}
+
+  /* sheet + components */
+  .sheet{flex:1;display:flex;flex-direction:column;gap:9px;padding:14px 13px 10px;overflow:hidden}
+  .card{background:var(--c);border-radius:8px;padding:11px 13px;
+    box-shadow:0 6px 16px -12px rgba(20,18,12,.3)}
+  .ui-night .card{box-shadow:none}
+  .whisper{display:flex;align-items:center;gap:11px}
+  .whisper .glow{width:33px;height:33px;border-radius:50%;flex:none;
+    background:radial-gradient(circle at 38% 32%,#F7E9CB,#D8B15E 72%);
+    box-shadow:0 0 13px 0 rgba(216,177,94,.45)}
+  .ui-night .whisper .glow{background:radial-gradient(circle at 38% 32%,#FBE6BD,#E4AE58 72%);
+    box-shadow:0 0 15px 0 rgba(228,174,88,.5)}
+  .whisper b{display:block;font-size:.79rem;font-weight:700}
+  .whisper span{display:block;font-size:.66rem;color:var(--s);margin-top:1px}
+  .memrow{display:flex;gap:9px}
+  .mem{flex:1;background:var(--c);border-radius:8px;padding:10px 11px;
+    box-shadow:0 6px 16px -12px rgba(20,18,12,.3)}
+  .ui-night .mem{box-shadow:none}
+  .mem b{display:block;font-size:.71rem;font-weight:700}
+  .mem span{display:block;font-size:.61rem;color:var(--s);margin-top:2px}
+  .tag{display:inline-block;font-size:.56rem;font-weight:700;padding:3px 8px;border-radius:100px}
+  .tag.amb{background:var(--amb-bg);color:var(--amb-ink)}
+  .tag.pea{background:var(--pea-bg);color:var(--pea-ink)}
+  .tag.clay{background:var(--clay-bg);color:var(--clay-ink)}
+  .tag.pri{background:var(--pritint);color:var(--prink)}
+  .mem .tag{margin-top:7px}
+
+  .tabs{margin-top:auto;display:flex;gap:6px;padding:5px;background:var(--c);border-radius:100px;
+    box-shadow:0 6px 16px -12px rgba(20,18,12,.3)}
+  .ui-night .tabs{box-shadow:none}
+  .tabs span{flex:1;text-align:center;font-size:.68rem;font-weight:700;color:var(--f);
+    padding:7px 0;border-radius:100px}
+  .tabs .on{background:var(--pritint);color:var(--prink)}
+
+  .pbtn{display:flex;align-items:center;justify-content:center;background:var(--pri-action,var(--pri));color:var(--onpri);
+    border-radius:100px;padding:12px 14px;font-weight:700;font-size:.8rem;letter-spacing:0}
+  .gbtn{display:flex;align-items:center;justify-content:center;background:transparent;color:var(--s);
+    border:1px solid rgba(127,127,127,.28);border-radius:100px;padding:11px 14px;font-weight:600;font-size:.78rem}
+
+  /* hatch */
+  .egg{width:118px;height:142px;margin:16px auto 0;border-radius:50% 50% 46% 46%/58% 58% 42% 42%;
+    background:radial-gradient(circle at 36% 28%,#FBF7EC,#EDE4D0 58%,#DFD2B8 100%);
+    box-shadow:0 18px 30px -18px rgba(80,66,40,.5),inset 0 -8px 18px rgba(160,140,100,.18);position:relative}
+  .egg::after{content:"";position:absolute;inset:0;border-radius:inherit;
+    background:radial-gradient(8% 6% at 30% 42%,rgba(216,155,148,.5),transparent 70%),
+      radial-gradient(7% 5% at 62% 30%,rgba(125,163,196,.45),transparent 70%),
+      radial-gradient(9% 7% at 56% 62%,rgba(216,177,94,.5),transparent 70%)}
+  .beat{animation:beat 2.8s ease-in-out infinite;transform-origin:50% 88%}
+  @keyframes beat{0%,100%{transform:scale(1)}50%{transform:scale(1.025)}}
+  @media (prefers-reduced-motion:reduce){.beat{animation:none}}
+  .steps{margin:14px 0 0;padding:0;list-style:none}
+  .steps li{display:flex;gap:9px;align-items:baseline;font-size:.74rem;color:var(--s);padding:5px 0}
+  .steps li b{font-family:var(--mono);font-size:.6rem;color:var(--prink);background:var(--pritint);
+    border-radius:100px;padding:2px 8px;flex:none;font-weight:700}
+  .steps li.todo b{background:transparent;border:1px dashed var(--f);color:var(--f)}
+  .field{background:var(--c);border-radius:100px;padding:12px 16px;font-size:.82rem;color:var(--f);
+    box-shadow:inset 0 0 0 1px rgba(127,127,127,.18)}
+  .field b{color:var(--k);font-weight:700}
+
+  /* timeline (奇遇) */
+  .tl-day{font-family:var(--mono);font-size:.58rem;letter-spacing:0;color:var(--f);margin:3px 2px 0}
+  .moment{background:var(--c);border-radius:8px;overflow:hidden;
+    box-shadow:0 6px 16px -12px rgba(20,18,12,.3)}
+  .moment.personal{box-shadow:0 6px 18px -12px rgba(140,105,40,.42),inset 0 0 0 1.5px #E2C075}
+  .moment .thumb{height:86px;position:relative}
+  .ai-mark{position:absolute;left:8px;bottom:8px;font-family:var(--mono);font-size:.5rem;
+    font-weight:700;letter-spacing:0;color:#fff;background:rgba(16,14,12,.65);
+    padding:2px 7px;border-radius:7px;backdrop-filter:blur(3px);z-index:3}
+  .moment .thumb .dur{position:absolute;right:8px;bottom:8px;font-family:var(--mono);font-size:.54rem;
+    color:#fff;background:rgba(16,14,12,.65);padding:2px 7px;border-radius:7px}
+  .moment .bd{padding:9px 12px 11px}
+  .moment .bd b{display:block;font-size:.78rem;font-weight:700}
+  .moment .bd p{margin:3px 0 0;font-size:.66rem;color:var(--s);line-height:1.5}
+  .moment .bd .tag{margin-top:8px}
+
+  /* detail */
+  .backpill{position:absolute;left:16px;top:40px;z-index:3;font-size:.64rem;font-weight:700;color:#fff;
+    background:rgba(16,14,12,.62);border-radius:100px;padding:5px 11px;backdrop-filter:blur(3px)}
+  .detail-ai{left:auto;right:16px;top:40px;bottom:auto}
+  .story{font-size:.78rem;line-height:1.7;color:var(--k)}
+  .story .en{color:inherit}
+  .meta{font-family:var(--mono);font-size:.56rem;color:var(--f);letter-spacing:0}
+  .earn{display:flex;align-items:center;gap:10px;background:var(--amb-bg);border-radius:8px;padding:10px 12px}
+  .earn i{width:26px;height:26px;border-radius:8px;flex:none;
+    background:linear-gradient(135deg,#F2D9A0,#D8B15E)}
+  .earn b{font-size:.72rem;font-weight:700;color:var(--amb-ink)}
+  .earn > span{display:block}
+  .earn > span > span{display:block;font-size:.62rem;color:var(--amb-ink);opacity:1}
+
+  /* pocket */
+  .keepsake-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .keepsake{min-height:104px;background:var(--c);border-radius:14px;padding:11px;
+    box-shadow:0 6px 16px -12px rgba(20,18,12,.3)}
+  .keepsake i{display:block;width:34px;height:34px;border-radius:10px;margin-bottom:9px;
+    background:var(--keepsake-color);box-shadow:inset 0 0 0 1px rgba(52,50,45,.08)}
+  .keepsake b{display:block;font-size:.72rem;font-weight:700}
+  .keepsake span{display:block;margin-top:2px;font-size:.61rem;color:var(--s);line-height:1.45}
+  .keepsake.clay{--keepsake-color:var(--toy-clay)}
+  .keepsake.amber{--keepsake-color:var(--toy-amber)}
+  .keepsake.pea{--keepsake-color:var(--toy-pea)}
+  .keepsake.blue{--keepsake-color:var(--pri)}
+
+  /* parent components */
+  .p-hd{padding:40px 15px 0;flex:none}
+  .p-hd b{font-size:1.02rem;font-weight:700;letter-spacing:0}
+  .p-hd span{display:block;font-size:.66rem;color:var(--s);margin-top:2px}
+  .tiles{display:flex;gap:8px}
+  .tile{flex:1;background:var(--c);border-radius:8px;padding:9px 10px;
+    box-shadow:0 5px 14px -11px rgba(20,18,12,.28)}
+  .tile b{display:block;font-size:1.06rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:0}
+  .tile b small{font-size:.6rem;font-weight:600;color:var(--s);margin-left:1px}
+  .tile span{display:block;font-size:.58rem;color:var(--s);margin-top:1px}
+  .pc{background:var(--c);border-radius:8px;padding:11px 13px;box-shadow:0 5px 14px -11px rgba(20,18,12,.28)}
+  .pc .lab{display:flex;align-items:baseline;justify-content:space-between}
+  .pc .lab b{font-size:.76rem;font-weight:700}
+  .pc .lab i{font-style:normal;font-family:var(--mono);font-size:.5rem;color:var(--f);letter-spacing:0}
+  .pc p{margin:5px 0 0;font-size:.7rem;color:var(--s);line-height:1.55}
+  .pc p strong{color:var(--k);font-weight:600}
+  .pc.warn{box-shadow:0 5px 14px -11px rgba(20,18,12,.28),inset 3px 0 0 var(--amb-line)}
+  .hint{background:var(--pritint);border-radius:8px;padding:9px 12px;font-size:.68rem;color:var(--prink);line-height:1.55}
+  .hint b{font-weight:700}
+
+  .wrow{display:flex;align-items:center;justify-content:space-between;padding:8px 2px;
+    border-bottom:1px solid rgba(127,127,127,.14)}
+  .wrow:last-child{border-bottom:none}
+  .wrow b{font-size:.78rem;font-weight:700;font-family:var(--mono),var(--sans)}
+  .wrow span{font-size:.62rem;color:var(--s)}
+  .bignum{display:flex;gap:18px;padding:2px 2px 0}
+  .bignum div b{font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:0}
+  .bignum div span{display:block;font-size:.6rem;color:var(--s)}
+
+  .mrow{padding:8px 2px;border-bottom:1px solid rgba(127,127,127,.14)}
+  .mrow:last-child{border-bottom:none}
+  .mrow .t{display:flex;align-items:center;justify-content:space-between}
+  .mrow .t b{font-size:.74rem;font-weight:700}
+  .mrow p{margin:2px 0 0;font-size:.62rem;color:var(--s);line-height:1.5}
+  .mrow p s{opacity:1;text-decoration-thickness:1px}
+  .setrow{display:flex;align-items:center;justify-content:space-between;padding:9px 2px;
+    border-bottom:1px solid rgba(127,127,127,.14);font-size:.72rem}
+  .setrow:last-child{border-bottom:none}
+  .setrow b{font-weight:700}
+  .setrow span{color:var(--s);font-size:.64rem;text-align:right}
+  .fixed-badge{display:inline-block;font-size:.56rem;font-weight:700;padding:3px 8px;border-radius:100px;
+    background:var(--pritint);color:var(--prink);white-space:nowrap}
+  .btnrow{display:flex;gap:8px}
+  .btnrow .gbtn{flex:1;padding:9px 8px;font-size:.68rem}
+
+  /* notifications */
+  .noti-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;margin-top:8px}
+  .noti{padding:8px 0}
+  .noti h3{font-family:var(--round);font-size:.9rem;margin:0;font-weight:700}
+  .noti .rule{font-size:.72rem;color:var(--faint);margin-top:3px}
+  .bub{margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 13px;
+    box-shadow:var(--shadow-sm)}
+  .bub b{display:block;font-size:.74rem;font-weight:700}
+  .bub p{margin:3px 0 0;font-size:.72rem;color:var(--soft);line-height:1.55}
+  .bub .when{font-family:var(--mono);font-size:.54rem;color:var(--faint);letter-spacing:0;display:block;margin-bottom:4px}
+
+  /* ammo */
+  .ammo{margin-top:10px;border-top:1px solid var(--line);padding:24px 0 60px}
+  .ammo dl{margin:14px 0 0;display:grid;gap:12px;max-width:74ch}
+  .ammo dt{font-weight:600;font-size:.85rem}
+  .ammo dd{margin:2px 0 0;color:var(--soft);font-size:.82rem;line-height:1.6}
+  .legal-source{max-width:74ch;margin:18px 0 0;font-size:.75rem;color:var(--faint)}
+  .legal-source a{color:var(--soft);text-underline-offset:3px}
+  .fn{display:block;margin-top:18px;font-size:.75rem;color:var(--faint)}
+
+  @media (max-width:640px){
+    .wrap{max-width:390px;margin:0;padding:0 16px}
+    h1{font-size:1.85rem}
+    header.hd{max-width:100%}
+    .bridge{display:grid;grid-template-columns:minmax(0,1fr);gap:12px}
+    .bridge .pair{flex-wrap:wrap;font-size:.72rem}
+    .bridge .pair span:not(.arr){overflow-wrap:anywhere;line-break:anywhere}
+    .screens{grid-template-columns:minmax(0,1fr)}
+    .shot{align-items:center}
+    .shot .cap{width:min(280px,100%)}
+  }
+  </style>
+</head>
+<body>
+<!-- Visual direction approved from Claude Artifact e76508ce: Soft Blocks by day, Nightlight at bedtime. -->
+<main class="page"><div class="wrap">
+
+  <div class="top">
+    <span class="kicker">OWLING 灵偶</span>
+    <button class="tbtn" id="tt" type="button" title="切换明暗模式" aria-label="☾ 当前深色主题，切换到浅色主题" aria-pressed="true"><span aria-hidden="true">☾</span><span class="sr-only">当前深色主题，切换到浅色主题</span></button>
+  </div>
+
+  <header class="hd">
+    <h1>灵偶 OWLING</h1>
+    <p class="lede"><b>白天积木，睡前夜灯。</b>同一个世界，两种光线。白天用雾蓝承载行动，玩具色只做内容分类；睡前转入靛蓝，只留一点烛光金。家长端沿用同一体系，烛光金只标记真正值得留意的内容。</p>
+    <div class="bridge">
+      <div class="pair"><i style="background:#D8B15E"></i><span class="arr">日转夜</span><i style="background:#E4AE58"></i><span>芥黄暖成烛光</span></div>
+      <div class="pair"><i style="background:#5D7FA6"></i><span class="arr">日转夜</span><i style="background:#2B2D4C"></i><span>雾蓝沉成靛夜</span></div>
+    </div>
+  </header>
+
+  <!-- ================================================= 孩子端 -->
+  <h2>孩子端 · 灵灵的窗口</h2>
+  <p class="secsub">只读的数字生命窗口: 看它此刻在干嘛, 看你们一起攒下的故事。它不能聊天, 不能刷题, 所有新内容都要靠回到毛绒玩偶身边讲话才会长出来。App 的天职是把孩子推回玩偶, 不是留住孩子。</p>
+
+  <div class="screens">
+
+    <!-- S1 孵化 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-day">
+        <div class="notch"></div>
+        <div class="scene h-md sc-egg"><div class="layer l1"></div><div class="layer l2"></div>
+          <div class="sc-cap dkink"><div class="sc-t">壳里有心跳, 贴近听听</div></div>
+        </div>
+        <div class="sheet">
+          <div class="egg beat"></div>
+          <ul class="steps">
+            <li><b>家长</b>账号绑定、数据授权与孵化卡认领完成</li>
+            <li><b>完成</b>听到了心跳, 它认得你的声音了</li>
+            <li class="todo"><b>最后</b>给它取一个只属于你们的名字</li>
+          </ul>
+          <div class="field">它叫 <b>灵灵</b>|</div>
+          <div class="pbtn" style="margin-top:9px">就叫这个名字</div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>开箱孵化</h3><ul>
+        <li>家长先在训练师端完成账号绑定与监护授权，孩子贴卡后进入<strong>盲盒孵化仪式</strong></li>
+        <li>名字是第一条<strong>世界正典</strong>: 写入后玩偶永远这么自称</li>
+        <li>全程无文字输入也可完成: 对着玩偶喊名字, 屏幕只做确认</li>
+      </ul></div>
+    </div>
+
+    <!-- S2 现在·日 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-day">
+        <div class="notch"></div>
+        <div class="scene h-lg sc-kite"><div class="layer l1"></div><div class="layer l2"></div>
+          <div class="live-wrap"><span class="live"><i></i>此刻 · AI生成</span></div>
+          <div class="sc-cap dkink">
+            <div class="sc-t">在山坡上等一阵风</div>
+            <div class="sc-l"><time>08:45</time><p>灵灵把 <span class="en">kite</span> 举过了头顶</p></div>
+            <div class="sc-l"><time>08:30</time><p>风筝线绕好了, 就差风啦</p></div>
+          </div>
+        </div>
+        <div class="sheet">
+          <div class="card whisper"><span class="glow"></span>
+            <span><b>灵灵有话想当面说</b><span>回家摸摸它, 就能听到</span></span></div>
+          <div class="memrow">
+            <div class="mem"><b>昨天的野餐</b><span>你帮它选了苹果味</span><span class="tag amb">专属瞬间</span></div>
+            <div class="mem"><b>认识第 12 天</b><span>一起攒了 9 个瞬间</span><span class="tag pea">回忆</span></div>
+          </div>
+          <div class="tabs"><span class="on">现在</span><span>奇遇</span><span>口袋</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>现在 · 白天</h3><ul>
+        <li>“此刻”展示<strong>预制的公共瞬间</strong>，孩子不在时灵灵也有自己的生活</li>
+        <li><strong>攒话卡</strong>是唯一从屏幕指向实体玩偶的主行动，绝不在 App 内剧透</li>
+        <li>英语只以生活词出现(kite), 永远没有词表和分数</li>
+      </ul></div>
+    </div>
+
+    <!-- S3 现在·夜 -->
+    <div class="shot">
+      <div class="phone night"><div class="screen ui-night">
+        <div class="notch"></div>
+        <div class="scene h-lg sc-night"><div class="layer l1"></div><div class="layer l2"></div>
+          <div class="live-wrap"><span class="live"><i></i>此刻 · AI生成</span></div>
+          <div class="sc-cap ltink">
+            <div class="sc-t">灵灵还醒着, 在数星星</div>
+            <div class="sc-l"><time>20:40</time><p>第七颗星星, 它取名叫 <span class="en">seven</span></p></div>
+            <div class="sc-l"><time>20:15</time><p>它把今天的故事收进了枕头底下</p></div>
+          </div>
+        </div>
+        <div class="sheet">
+          <div class="card whisper"><span class="glow"></span>
+            <span><b>睡前悄悄话攒好了</b><span>摸摸它, 说完就睡哦</span></span></div>
+          <div class="card"><b style="font-size:.74rem">21:00 灵灵要睡了</b>
+            <span style="display:block;font-size:.64rem;color:var(--s);margin-top:2px">它睡着后这里也会变安静, 明早再来看它</span></div>
+          <div class="tabs"><span class="on">现在</span><span>奇遇</span><span>口袋</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>现在 · 夜灯模式</h3><ul>
+        <li>到家长设定的睡前时段<strong>自动换夜灯</strong>: 不是换肤, 是灵灵的世界真的入夜</li>
+        <li>防沉迷长在世界观里: <strong>"灵灵要睡了"</strong>, 不是"使用时间已达上限"</li>
+        <li>21:00 后 App 与玩偶同步入睡, 硬闸门在设备侧执行</li>
+      </ul></div>
+    </div>
+
+    <!-- S4 奇遇 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-day">
+        <div class="notch"></div>
+        <div class="p-hd"><b>灵灵的奇遇</b><span>认识第 12 天</span></div>
+        <div class="sheet">
+          <div class="tl-day">今天</div>
+          <div class="moment personal">
+            <div class="thumb sc-kite"><div class="layer l1"></div><div class="layer l2"></div><span class="ai-mark">AI生成</span><span class="dur">0:15</span></div>
+            <div class="bd"><b>风筝终于飞起来啦</b>
+              <p>你教它的 <span class="en">kite</span>, 它一整天都挂在嘴边</p>
+              <span class="tag amb">专属瞬间, 和你有关</span></div>
+          </div>
+          <div class="tl-day">7月10日</div>
+          <div class="moment">
+            <div class="thumb sc-market"><div class="layer l1"></div><div class="layer l2"></div><span class="ai-mark">AI生成</span><span class="dur">0:15</span></div>
+            <div class="bd"><b>菜市场遇到老乡</b>
+              <p>灵灵混进蘑菇堆里, 差点没被认出来</p>
+              <span class="tag pea">灵灵自己的一天</span></div>
+          </div>
+          <div class="tabs"><span>现在</span><span class="on">奇遇</span><span>口袋</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>奇遇 · 回忆</h3><ul>
+        <li>两种瞬间一眼可分：<strong>专属瞬间</strong>由你们的对话生成，每天至多 3 个；公共瞬间记录它自己的生活</li>
+        <li>每个瞬间是 15 秒 AI 视频 + 一句话, 像翻一本会动的绘本</li>
+        <li>只能看和收藏，没有点赞、公开转发或陌生人社交</li>
+      </ul></div>
+    </div>
+
+    <!-- S5 专属瞬间详情 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-day">
+        <div class="notch"></div>
+        <div class="scene h-md sc-kite"><div class="layer l1"></div><div class="layer l2"></div>
+          <span class="backpill">返回</span>
+          <span class="ai-mark detail-ai">AI生成</span>
+        </div>
+        <div class="sheet">
+          <span class="meta">7月11日, 和小柚一起</span>
+          <b style="font-family:var(--round);font-size:1.05rem;font-weight:700;letter-spacing:0">风筝终于飞起来啦</b>
+          <p class="story" style="margin:0">小柚教了灵灵一个新词: <span class="en">kite</span>。灵灵练了一下午, 风一来就喊 "<span class="en">kite, fly!</span>"。现在它把风筝挂在了床头, 说这样梦里也能接着飞。</p>
+          <div class="earn"><i></i><span><b>收获: 风筝牌牌</b><span>挂在灵灵的床头, 口袋里也存了一份</span></span></div>
+          <div class="gbtn">分享给家人</div>
+          <div class="pbtn">收进口袋</div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>专属瞬间详情</h3><ul>
+        <li>故事复述孩子教它的词, 这就是复习, 但读起来只是<strong>灵灵的日记</strong></li>
+        <li>孩子端只有"收进口袋"(收藏), <strong>没有删除</strong>: 经历不许涂改</li>
+        <li>分享只发送给已绑定的家庭账号，生成一张私域卡片作为家庭话题入口</li>
+      </ul></div>
+    </div>
+
+    <!-- S6 口袋 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-day">
+        <div class="notch"></div>
+        <div class="p-hd"><b>小柚的口袋</b><span>从共同经历里留下的信物</span></div>
+        <div class="sheet">
+          <div class="keepsake-grid">
+            <div class="keepsake amber"><i aria-hidden="true"></i><b>风筝牌牌</b><span>第一次把 kite 说出口</span></div>
+            <div class="keepsake clay"><i aria-hidden="true"></i><b>苹果餐布</b><span>一起决定野餐的味道</span></div>
+            <div class="keepsake pea"><i aria-hidden="true"></i><b>蘑菇贴纸</b><span>灵灵在菜市场的奇遇</span></div>
+            <div class="keepsake blue"><i aria-hidden="true"></i><b>星星小灯</b><span>数到 seven 的那个晚上</span></div>
+          </div>
+          <div class="hint"><b>只收共同经历。</b>信物不会靠签到、付费或刷屏获得。</div>
+          <div class="tabs"><span>现在</span><span>奇遇</span><span class="on">口袋</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>口袋 · 信物</h3><ul>
+        <li>“收进口袋”有明确落点，信物与专属瞬间双向关联</li>
+        <li>陶粉、芥黄、豆绿和雾蓝各守一类内容，颜色承担信息而非装饰</li>
+        <li>不做签到、抽卡、稀有度或排行榜，避免把回忆变成刷取系统</li>
+      </ul></div>
+    </div>
+
+  </div>
+
+  <!-- ================================================= 家长端 -->
+  <h2>家长端 · 训练师手册</h2>
+  <p class="secsub">同一份记忆, 换一副专业眼镜。语气是共养不是监控: 数据为"今晚聊什么"服务, 烛光金只在真正值得留意的地方亮起来。</p>
+
+  <div class="screens">
+
+    <!-- P1 今日 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-par">
+        <div class="notch"></div>
+        <div class="p-hd"><b>小柚和灵灵, 今天</b><span>7月11日 周六</span></div>
+        <div class="sheet">
+          <div class="tiles">
+            <div class="tile"><b>18<small>分钟</small></b><span>一起度过</span></div>
+            <div class="tile"><b>3<small>件事</small></b><span>聊到</span></div>
+            <div class="tile"><b>1<small>个</small></b><span>新词开口</span></div>
+          </div>
+          <div class="pc"><div class="lab"><b>心情速览</b><i>大致参考, 非诊断</i></div>
+            <p>整体放松, 讲风筝时话变多了。聊到学校时停顿了几次, 也许有事想说。</p></div>
+          <div class="pc warn"><div class="lab"><b>值得留意</b></div>
+            <p>小柚提到同桌拿走了她的橡皮, 灵灵安抚后没有追问。<strong>今晚可以问问: 后来橡皮回来了吗?</strong></p></div>
+          <div class="hint"><b>今晚一起:</b> 聊聊风筝吧, 她刚学会 kite, 顺口带一个 wind 正合适。</div>
+          <div class="tabs"><span class="on">今日</span><span>成长</span><span>记忆</span><span>守护</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>今日速览</h3><ul>
+        <li>三个数字讲完今天, 剩下全是<strong>可以行动的建议</strong>, 不是报表</li>
+        <li>心情速览基于对话文本, 页面常驻"非诊断"标注(合规要求也是诚实)</li>
+        <li>"值得留意"是烛光金唯一出场的地方, 稀缺所以醒目</li>
+      </ul></div>
+    </div>
+
+    <!-- P2 成长 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-par">
+        <div class="notch"></div>
+        <div class="p-hd"><b>英语成长</b><span>本周</span></div>
+        <div class="sheet">
+          <div class="pc"><div class="bignum">
+            <div><b>9</b><span>主动开口次数</span></div>
+            <div><b>3</b><span>新接触的词</span></div>
+            <div><b>1</b><span>会说了</span></div>
+          </div></div>
+          <div class="pc">
+            <div class="wrow"><b>kite</b><span class="tag pea">会说了</span></div>
+            <div class="wrow"><b>wind</b><span class="tag pri">听懂了</span></div>
+            <div class="wrow"><b>seed</b><span class="tag clay">听过</span></div>
+          </div>
+          <div class="hint"><b>下次自然出现:</b> 周六, kite 会织进灵灵的野餐故事里, 不用您做任何事。</div>
+          <div class="pc"><div class="lab"><b>撤退记录</b></div>
+            <p>周三小柚说"不想说英语", 灵灵当天放弃了全部复习, 只是陪她。<strong>这是设计, 不是故障。</strong></p></div>
+          <div class="tabs"><span>今日</span><span class="on">成长</span><span>记忆</span><span>守护</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>英语成长</h3><ul>
+        <li>三层掌握度(听过 / 听懂 / 会说)用玩具色区分, <strong>孩子端永远看不到这页</strong></li>
+        <li>复习计划全自动: 到期词织进灵灵明天的生活, 家长只需知情</li>
+        <li><strong>撤退记录</strong>公开展示"宁可不复习也不消耗关系"的产品底线</li>
+      </ul></div>
+    </div>
+
+    <!-- P3 记忆 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-par">
+        <div class="notch"></div>
+        <div class="p-hd"><b>记忆库</b><span>孩子接触的一切, 可见可导出</span></div>
+        <div class="sheet">
+          <div class="pc">
+            <div class="mrow"><div class="t"><b>教会灵灵 kite</b><span class="tag amb">专属瞬间</span></div>
+              <p>7月11日, 生成了一个专属瞬间和一枚风筝牌牌</p></div>
+            <div class="mrow"><div class="t"><b>同桌拿走了橡皮</b><span class="tag clay">情绪</span></div>
+              <p>7月11日, 已在今日速览中提醒您</p></div>
+            <div class="mrow"><div class="t"><b>不怕黑了</b><span class="tag pea">成长</span></div>
+              <p><s>以前: 睡觉要开灯</s> 现在: 有恐龙小夜灯就行</p></div>
+          </div>
+          <div class="pc"><div class="lab"><b>边界</b></div>
+            <p>不提供“挑着删来改写叙事”。您可以设红线，让灵灵以后<strong>不再谈起</strong>某件事；上线版通过独立的数据权利流程执行法定数据删除。</p>
+            <span class="tag clay" style="margin-top:8px">红线: 不再谈恐龙电影</span></div>
+          <div class="btnrow"><span class="gbtn">全量导出</span><span class="gbtn">删除账户</span></div>
+          <div class="tabs"><span>今日</span><span>成长</span><span class="on">记忆</span><span>守护</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>记忆库</h3><ul>
+        <li>成长感的招牌画面: <strong>被替代的旧事实</strong>划线保留, "以前怕黑"没有被抹掉</li>
+        <li>产品不提供策展式改写；<strong>数据导出、删除与注销</strong>走独立权利流程，最终范围以法务评审为准</li>
+        <li>红线=玩偶闭嘴机制, 不是记忆手术</li>
+      </ul></div>
+    </div>
+
+    <!-- P4 守护 -->
+    <div class="shot">
+      <div class="phone"><div class="screen ui-par">
+        <div class="notch"></div>
+        <div class="p-hd"><b>守护</b><span>时间, 话题, 身份</span></div>
+        <div class="sheet">
+          <div class="pc">
+            <div class="setrow"><b>可用时段</b><span>放学后 16:00 到 19:00<br>睡前 20:00 到 21:00 夜灯</span></div>
+            <div class="setrow"><b>每日相处</b><span>上限 40 分钟, 今天 18 分钟</span></div>
+            <div class="setrow"><b>物理休眠</b><span>开关在玩偶尾巴上, 现在: 醒着</span></div>
+          </div>
+          <div class="pc">
+            <div class="setrow"><b>红线话题</b><span>恐龙电影, 大伯家的狗</span></div>
+            <div class="setrow"><b>AI 身份说明</b><span style="display:flex;align-items:center;gap:8px">孵化时与使用中定期说明<span class="fixed-badge">系统固定</span></span></div>
+          </div>
+          <div class="pc"><div class="lab"><b>通知偏好</b></div>
+            <p>短信只发安全提醒。卡片每晚一条摘要。孩子端推送每天至多一条, 只在放学窗口。</p></div>
+          <div class="tabs"><span>今日</span><span>成长</span><span>记忆</span><span class="on">守护</span></div>
+        </div>
+      </div></div>
+      <div class="cap"><h3>守护</h3><ul>
+        <li>时长闸门 + 夜间停服 + 物理开关三层, <strong>断网也生效</strong></li>
+        <li>AI 身份说明是固定机制，不伪装成可关闭的二元开关</li>
+        <li>通知克制写进设置页, 让家长看见我们不骚扰任何人</li>
+      </ul></div>
+    </div>
+
+  </div>
+
+  <!-- ================================================= 触达 -->
+  <h2>主动触达 · 三条通道, 各守其位</h2>
+  <p class="secsub">原则: 孩子端把人往玩偶推, 家长卡片把人往对话推, 短信只留给真正的紧急。频次全部封顶。</p>
+
+  <div class="noti-grid">
+    <div class="noti"><h3>孩子端推送</h3><div class="rule">每天至多 1 条, 只在放学窗口, 永不剧透</div>
+      <div class="bub"><span class="when">16:30 放学窗口</span><b>灵灵有话想当面说</b>
+        <p>它从下午就开始攒着了, 回家摸摸它吧。</p></div>
+    </div>
+    <div class="noti"><h3>家长卡片</h3><div class="rule">每晚 1 条摘要, 里程碑另计但每周至多 1 条</div>
+      <div class="bub"><span class="when">21:05 每晚摘要</span><b>今天的小柚和灵灵</b>
+        <p>相处 18 分钟, kite 会说了。有件橡皮的小事值得今晚聊聊, 详情在 App。</p></div>
+      <div class="bub"><span class="when">周日 里程碑</span><b>灵灵升到伙伴期</b>
+        <p>这周小柚主动说了 9 次英语, 都发生在帮灵灵做事的时候。</p></div>
+    </div>
+    <div class="noti"><h3>家长短信</h3><div class="rule">仅两类: 安全与设备, 即时送达</div>
+      <div class="bub"><span class="when">触发即发</span><b>灵偶安全提醒</b>
+        <p>对话触及需要您关注的内容, 灵灵已安抚并暂停话题, 请尽快查看 App。</p></div>
+      <div class="bub"><span class="when">触发即发</span><b>设备提醒</b>
+        <p>玩偶已离线超过 48 小时, 如非收纳请检查。</p></div>
+    </div>
+  </div>
+
+  <!-- ================================================= ammo -->
+  <div class="ammo">
+    <h2 style="margin-top:24px">评委问答弹药</h2>
+    <dl>
+      <dt>"这不就是把聊天机器人塞进玩偶?"</dt>
+      <dd>孩子端 App 不能聊天。所有生成都发生在与实体玩偶的语音互动里, App 只是共同经历的相册。数字生命的两条内容流(公共瞬间预制, 专属瞬间每日限 3)成本可控且离线可演示。</dd>
+      <dt>"怎么面对拟人化互动服务管理办法?"(2026-07-15 施行)</dt>
+      <dd>定位是学习伙伴而非虚拟亲属。禁用“我爱你、当家人”等话术，AI 身份固定说明，分龄时长与夜间休眠由设备侧执行。面向 6-10 岁，首次孵化必须由家长端绑定并确认儿童数据授权。</dd>
+      <dt>"家长为什么不能删记忆?"</dt>
+      <dd>黑客松稿区分“策展式改写”和“数据权利删除”：前者不提供，后者须在上线前通过独立数据权利中心实现。单条、全量与备份清除的最终范围需完成法务与数据架构评审，本稿不宣称已满足特定法域。</dd>
+      <dt>"情绪分析合规吗?"</dt>
+      <dd>“心情速览”只基于对话文本；实时链路的临时声纹仅用于说话人过滤，不作为情绪识别特征。保存期限、清除机制与告知方式需在上线前完成隐私评审。输出只给家长，页面常驻“大致参考，非诊断”，且不回流调节对孩子的话术。</dd>
+    </dl>
+    <p class="legal-source">合规参考：<a href="https://www.cac.gov.cn/2026-04/10/c_1777558395078289.htm" target="_blank" rel="noopener noreferrer">《人工智能拟人化互动服务管理暂行办法》官方原文</a>。本页是黑客松产品设计稿，不替代法务意见。</p>
+    <span class="fn">手机样机按 280/390 比例缩放；实现时孩子端正文不得低于 16px，辅助信息不得低于 12px，并支持动态字体。场景画面为 CSS 结构占位，需替换为最终精灵视频帧后再进入视觉验收。本页只用于视觉与信息架构评审，手机内控件不代表交互原型或无障碍实现。</span>
+  </div>
+
+</div></main>
+
+<script>
+  (function(){
+    var b=document.getElementById('tt');
+    if(!b)return;
+    var root=document.documentElement;
+    var icon=b.querySelector('[aria-hidden="true"]');
+    var assist=b.querySelector('.sr-only');
+    function applyTheme(theme){
+      var dark=theme==='dark';
+      var label=dark?'当前深色主题，切换到浅色主题':'当前浅色主题，切换到深色主题';
+      root.setAttribute('data-theme',theme);
+      icon.textContent=dark?'☾':'☀︎';
+      assist.textContent=label;
+      b.setAttribute('aria-label',icon.textContent+' '+label);
+      b.setAttribute('aria-pressed',String(dark));
+      b.title=label;
+    }
+    var initial=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';
+    applyTheme(initial);
+    b.addEventListener('click',function(){
+      applyTheme(root.getAttribute('data-theme')==='dark'?'light':'dark');
+    });
+  })();
+</script>
+</body>
+</html>

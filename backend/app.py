@@ -36,6 +36,7 @@ app.add_middleware(
 
 CHILD_ID = db.CHILD_ID
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
+DESIGN = os.path.join(os.path.dirname(__file__), "..", "design")
 
 
 @app.on_event("startup")
@@ -355,6 +356,16 @@ def admin_reseed():
 # ---------------------------------------------------------------- 前端
 
 app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND, "assets")), name="assets")
+
+
+@app.get("/design")
+def design():
+    return FileResponse(os.path.join(DESIGN, "owling-app-design.html"))
+
+
+@app.head("/design")
+def design_head():
+    return FileResponse(os.path.join(DESIGN, "owling-app-design.html"))
 
 
 @app.get("/")
