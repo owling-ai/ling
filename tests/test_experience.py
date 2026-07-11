@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import importlib
 import importlib.util
 from datetime import datetime, timedelta
@@ -257,6 +258,58 @@ def test_ready_job_publishes_after_service_restart(
     assert row == {"status": "published", "published_asset_id": "choice-cake-v1"}
 
 
+def test_injected_provider_can_publish_non_catalog_asset_and_restart(
+    isolated_db: Path, clock: list[datetime]
+) -> None:
+    experience = _experience_module()
+    catalog = media.default_catalog(reload=True)
+
+    class ExternalProvider(media.MockMediaProvider):
+        name = "fake-external"
+
+        def result(self, job_id: int) -> dict:
+            template = copy.deepcopy(super().result(job_id))
+            template.update(
+                {
+                    "asset_id": "external-generated-asset",
+                    "src": "https://cdn.example.test/generated.mp4",
+                    "poster": "https://cdn.example.test/generated.png",
+                    "alt": "外部 provider 生成的瞬间",
+                    "sha256": {"media": "a" * 64, "poster": "b" * 64},
+                }
+            )
+            return template
+
+    provider = ExternalProvider(
+        catalog,
+        now_fn=lambda: clock[0],
+        delay_seconds=3,
+    )
+    service = experience.ExperienceService(
+        catalog=catalog,
+        provider=provider,
+        now_fn=lambda: clock[0],
+        timezone="Asia/Shanghai",
+    )
+    settled = _settle(service)
+    published = _publish(service, clock, settled)
+    stored = db.q1(
+        "SELECT published_asset_id,published_asset_json FROM moments WHERE id=?",
+        (settled["moment_id"],),
+    )
+
+    assert stored["published_asset_id"] == "external-generated-asset"
+    assert published["media"]["src"] == "https://cdn.example.test/generated.mp4"
+    assert '"provider":"fake-external"' in stored["published_asset_json"]
+
+    restarted = experience.ExperienceService(
+        catalog=catalog,
+        now_fn=lambda: clock[0],
+        timezone="Asia/Shanghai",
+    )
+    assert restarted.moment_detail(settled["moment_id"])["media"] == published["media"]
+
+
 def test_published_asset_and_story_are_immutable(
     experience_service, clock: list[datetime]
 ) -> None:
@@ -277,6 +330,77 @@ def test_published_asset_and_story_are_immutable(
         (settled["moment_id"],),
     ) == original
     assert published["media"] == again["media"]
+
+
+def test_published_moment_keeps_media_snapshot_after_catalog_changes(
+    experience_service, clock: list[datetime]
+) -> None:
+    settled = _settle(experience_service)
+    published = _publish(experience_service, clock, settled)
+    assets = copy.deepcopy(experience_service.catalog.assets)
+    changed = next(asset for asset in assets if asset["asset_id"] == "choice-cake-v1")
+    changed["src"] = "replacement.mp4"
+    changed["poster"] = "replacement.png"
+    changed["alt"] = "被改写的目录内容"
+    evolved_catalog = media.MediaCatalog(
+        copy.deepcopy(experience_service.catalog.world),
+        assets,
+        experience_service.catalog.media_root,
+    )
+    restarted = _experience_module().ExperienceService(
+        catalog=evolved_catalog,
+        now_fn=lambda: clock[0],
+        timezone="Asia/Shanghai",
+    )
+
+    after_change = restarted.moment_detail(settled["moment_id"])
+    stored = db.q1(
+        "SELECT published_asset_json FROM moments WHERE id=?",
+        (settled["moment_id"],),
+    )
+
+    assert after_change["media"] == published["media"]
+    assert "replacement.mp4" not in stored["published_asset_json"]
+    assert "sha256" in stored["published_asset_json"]
+
+
+def test_world_assignment_keeps_event_and_media_after_catalog_changes(
+    experience_service, clock: list[datetime]
+) -> None:
+    first = experience_service.child_world_now(1, now=clock[0])
+    assets = copy.deepcopy(experience_service.catalog.assets)
+    assigned_id = first["event"]["variant_id"]
+    assigned = next(asset for asset in assets if asset["asset_id"] == assigned_id)
+    assigned["src"] = "replacement.mp4"
+    assigned["poster"] = "replacement.png"
+    assigned["alt"] = "被改写的公共目录内容"
+    added = copy.deepcopy(assigned)
+    added["asset_id"] = "new-hill-wind-variant"
+    added["src"] = "new.mp4"
+    added["poster"] = "new.png"
+    assets.append(added)
+    evolved_catalog = media.MediaCatalog(
+        copy.deepcopy(experience_service.catalog.world),
+        assets,
+        experience_service.catalog.media_root,
+    )
+    restarted = _experience_module().ExperienceService(
+        catalog=evolved_catalog,
+        now_fn=lambda: clock[0],
+        timezone="Asia/Shanghai",
+    )
+
+    after_change = restarted.child_world_now(1, now=clock[0])
+    assignment = db.q1(
+        "SELECT variant_id,snapshot_json FROM world_assignments "
+        "WHERE child_id=? AND event_id=? AND event_version=?",
+        (1, first["event"]["event_id"], first["event"]["event_version"]),
+    )
+
+    assert after_change["event"] == first["event"]
+    assert assignment["variant_id"] == assigned_id
+    assert "replacement.mp4" not in assignment["snapshot_json"]
+    assert "sha256" in assignment["snapshot_json"]
 
 
 def test_feed_separates_pending_and_hides_failed(

@@ -9,7 +9,7 @@ import json
 import os
 from datetime import datetime, timedelta
 
-from . import db, life, memory
+from . import db, life, media, memory
 
 CHILD_ID = db.CHILD_ID
 
@@ -35,7 +35,7 @@ def load_curriculum():
 
 def wipe():
     conn = db.get_conn()
-    for t in ["pocket_entries", "keepsakes", "generation_jobs", "moments",
+    for t in ["pocket_entries", "keepsakes", "generation_jobs", "moments", "world_assignments",
               "children", "core_cards", "diary_entries", "facts", "growth_snapshots",
               "learning_state", "item_mastery", "doll_canon", "doll_arcs", "doll_events",
               "session_agenda", "sessions"]:
@@ -49,11 +49,17 @@ def _seed_experience() -> dict:
     created_at = (now - timedelta(minutes=18)).isoformat(timespec="seconds")
     published_at = (now - timedelta(minutes=17)).isoformat(timespec="seconds")
     local_date = now.date().isoformat()
+    published_asset = media.default_catalog().asset("word-kite-v1")
+    published_asset_json = json.dumps(
+        media.asset_snapshot(published_asset, provider="mock"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     db.execute(
         "INSERT OR IGNORE INTO moments("
         "child_id,source_type,source_id,event_key,event_value,semantic_version,idempotency_key,"
-        "local_date,title,story,status,published_asset_id,created_at,published_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,'published',?,?,?)",
+        "local_date,title,story,status,published_asset_id,published_asset_json,created_at,published_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,'published',?,?,?,?)",
         (
             CHILD_ID,
             "seed",
@@ -66,6 +72,7 @@ def _seed_experience() -> dict:
             "风筝终于飞起来啦",
             "悠悠教会灵灵一个新词：kite。风一来，它就举着风筝喊 kite, fly!",
             "word-kite-v1",
+            published_asset_json,
             created_at,
             published_at,
         ),
@@ -73,6 +80,11 @@ def _seed_experience() -> dict:
     moment_id = db.q1(
         "SELECT id FROM moments WHERE idempotency_key='seed:moment:kite:v1'"
     )["id"]
+    db.execute(
+        "UPDATE moments SET published_asset_json=? WHERE id=? "
+        "AND (published_asset_json IS NULL OR published_asset_json='')",
+        (published_asset_json, moment_id),
+    )
     db.execute(
         "INSERT OR IGNORE INTO generation_jobs("
         "moment_id,attempt,media_kind,provider,asset_group,status,asset_id,idempotency_key,"

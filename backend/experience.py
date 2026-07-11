@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -32,6 +33,7 @@ PARENT_TOPIC_LABELS = {
     "日常": "日常",
     "初次见面": "初次见面",
 }
+PARENT_MOOD_LABELS = {"开心", "兴奋", "平静", "难过", "害怕", "骄傲"}
 
 
 class ExperienceNotFound(KeyError):
@@ -51,6 +53,7 @@ class ExperienceService:
         self,
         catalog: media.MediaCatalog | None = None,
         *,
+        provider: media.GenerationProvider | None = None,
         now_fn: Callable[[], datetime] | None = None,
         timezone: str = "Asia/Shanghai",
         generation_delay_seconds: int = 3,
@@ -59,7 +62,7 @@ class ExperienceService:
         self.now_fn = now_fn or (lambda: datetime.now(dt_timezone.utc))
         self.timezone = timezone
         self.zone = ZoneInfo(timezone)
-        self.provider = media.MockMediaProvider(
+        self.provider = provider or media.MockMediaProvider(
             self.catalog,
             now_fn=self.now_fn,
             delay_seconds=generation_delay_seconds,
@@ -67,6 +70,14 @@ class ExperienceService:
 
     def now(self) -> datetime:
         return _aware(self.now_fn()).astimezone(self.zone)
+
+    @staticmethod
+    def _snapshot_json(asset: dict, *, provider: str) -> str:
+        return json.dumps(
+            media.asset_snapshot(asset, provider=provider),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
     @staticmethod
     def _idempotency_key(
@@ -322,15 +333,24 @@ class ExperienceService:
             if bound["status"] != "succeeded":
                 return {"action": "rendering", "attempt": bound["attempt"]}
 
-            asset = asset or self.catalog.asset(bound["asset_id"])
+            asset = asset or self.provider.result(bound["id"])
             published_at = _iso(self.now())
+            snapshot_json = self._snapshot_json(asset, provider=self.provider.name)
             updated = conn.execute(
-                "UPDATE moments SET status='published',published_asset_id=?,published_at=?,"
-                "error_code='' WHERE id=? AND status='rendering' "
+                "UPDATE moments SET status='published',published_asset_id=?,"
+                "published_asset_json=?,published_at=?,error_code='' "
+                "WHERE id=? AND status='rendering' "
                 "AND published_asset_id IS NULL "
                 "AND EXISTS (SELECT 1 FROM generation_jobs "
                 "WHERE id=? AND moment_id=? AND status='succeeded')",
-                (asset["asset_id"], published_at, moment_id, bound["id"], moment_id),
+                (
+                    asset["asset_id"],
+                    snapshot_json,
+                    published_at,
+                    moment_id,
+                    bound["id"],
+                    moment_id,
+                ),
             ).rowcount
             if updated:
                 keepsake = (asset.get("moment") or {}).get("keepsake")
@@ -396,6 +416,44 @@ class ExperienceService:
             "collected": bool(row["collected"]),
         }
 
+    def _published_asset_snapshot(self, moment: dict) -> dict:
+        snapshot = db.jloads(moment.get("published_asset_json"), {})
+        if isinstance(snapshot, dict) and isinstance(snapshot.get("media"), dict):
+            return snapshot
+        asset = self.catalog.asset(moment["published_asset_id"])
+        snapshot = media.asset_snapshot(asset, provider=self.provider.name)
+        snapshot_json = json.dumps(
+            snapshot, ensure_ascii=False, separators=(",", ":")
+        )
+        db.execute(
+            "UPDATE moments SET published_asset_json=? WHERE id=? "
+            "AND (published_asset_json IS NULL OR published_asset_json='')",
+            (snapshot_json, moment["id"]),
+        )
+        return snapshot
+
+    def backfill_published_asset_snapshots(self) -> int:
+        """Freeze legacy published rows before a newer manifest can reinterpret them."""
+        rows = db.q(
+            "SELECT id,published_asset_id FROM moments WHERE status='published' "
+            "AND published_asset_id IS NOT NULL "
+            "AND (published_asset_json IS NULL OR published_asset_json='')"
+        )
+        updated = 0
+        for row in rows:
+            try:
+                asset = self.catalog.asset(row["published_asset_id"])
+            except media.MediaError:
+                continue
+            snapshot_json = self._snapshot_json(asset, provider=self.provider.name)
+            db.execute(
+                "UPDATE moments SET published_asset_json=? WHERE id=? "
+                "AND (published_asset_json IS NULL OR published_asset_json='')",
+                (snapshot_json, row["id"]),
+            )
+            updated += 1
+        return updated
+
     def moment_detail(self, moment_id: int) -> dict:
         moment = db.q1("SELECT * FROM moments WHERE id=?", (moment_id,))
         if not moment:
@@ -420,12 +478,12 @@ class ExperienceService:
                 "message": "这个瞬间暂时没有生成成功",
             }
         else:
-            asset = self.catalog.asset(moment["published_asset_id"])
+            asset_snapshot = self._published_asset_snapshot(moment)
             detail.update(
                 {
                     "story": moment["story"],
                     "occurred_at": moment["published_at"] or moment["created_at"],
-                    "media": self.catalog.public_asset(asset),
+                    "media": asset_snapshot["media"],
                     "keepsake": self._keepsake_for_moment(moment_id),
                 }
             )
@@ -578,16 +636,9 @@ class ExperienceService:
         selected = self.catalog.select_world_event(
             doll_id, current, self.timezone
         )
-        raw_event = selected["event"]
-        event = {
-            "event_id": raw_event["event_id"],
-            "event_version": raw_event["event_version"],
-            "variant_id": raw_event["variant_id"],
-            "title": raw_event["title"],
-            "summary": raw_event["summary"],
-            "timeline": raw_event.get("timeline", []),
-            "media": raw_event["media"],
-        }
+        event = self._assigned_world_event(
+            child_id, doll_id, selected["event"]
+        )
         known_days = 1
         try:
             created = datetime.fromisoformat(child.get("created_at", ""))
@@ -620,6 +671,54 @@ class ExperienceService:
                 "keepsakes": keepsakes["n"],
             },
         }
+
+    def _assigned_world_event(
+        self, child_id: int, doll_id: str, raw_event: dict
+    ) -> dict:
+        key = (child_id, raw_event["event_id"], raw_event["event_version"])
+        with db.transaction(immediate=True) as conn:
+            row = conn.execute(
+                "SELECT snapshot_json FROM world_assignments "
+                "WHERE child_id=? AND event_id=? AND event_version=?",
+                key,
+            ).fetchone()
+            if row is not None:
+                snapshot = db.jloads(row["snapshot_json"], {})
+            else:
+                asset = self.catalog.asset(raw_event["variant_id"])
+                asset_snapshot = media.asset_snapshot(asset, provider="manifest")
+                event = {
+                    "event_id": raw_event["event_id"],
+                    "event_version": raw_event["event_version"],
+                    "variant_id": raw_event["variant_id"],
+                    "title": raw_event["title"],
+                    "summary": raw_event["summary"],
+                    "timeline": raw_event.get("timeline", []),
+                    "media": asset_snapshot["media"],
+                }
+                snapshot = {"event": event, "asset": asset_snapshot}
+                conn.execute(
+                    "INSERT INTO world_assignments("
+                    "child_id,doll_id,event_id,event_version,variant_id,snapshot_json,assigned_at"
+                    ") VALUES(?,?,?,?,?,?,?)",
+                    (
+                        child_id,
+                        doll_id,
+                        raw_event["event_id"],
+                        raw_event["event_version"],
+                        raw_event["variant_id"],
+                        json.dumps(
+                            snapshot,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        _iso(self.now()),
+                    ),
+                )
+        event = snapshot.get("event") if isinstance(snapshot, dict) else None
+        if not isinstance(event, dict) or not isinstance(event.get("media"), dict):
+            raise media.MediaNotFound("stored world assignment is invalid")
+        return event
 
     def child_feed(
         self, child_id: int, *, now: datetime | None = None
@@ -683,7 +782,12 @@ class ExperienceService:
             for diary in diaries
             for topic in db.jloads(diary.get("topics_json"))
         }
-        emotions = db.jloads(latest.get("emotions_json")) if latest else []
+        raw_emotions = db.jloads(latest.get("emotions_json")) if latest else []
+        emotions = [
+            emotion
+            for emotion in raw_emotions
+            if isinstance(emotion, str) and emotion in PARENT_MOOD_LABELS
+        ] if isinstance(raw_emotions, list) else []
         mood_words = "、".join(emotions[:2]) if emotions else "平静"
         new_words = db.q1(
             "SELECT COUNT(*) AS n FROM item_mastery WHERE child_id=? "

@@ -6,8 +6,9 @@ from urllib.parse import urljoin
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
-from backend import db, engine, experience, llm, media
+from backend import db, engine, experience, llm, media, realtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -148,6 +149,9 @@ def test_remote_debug_and_admin_apis_require_a_token(
         for method, path in (
             (remote.get, "/api/facts"),
             (remote.get, "/api/state"),
+            (remote.post, "/api/session/start"),
+            (remote.post, "/api/session/end"),
+            (remote.post, "/api/volcengine/prepare"),
             (remote.post, "/api/admin/reseed"),
         ):
             response = method(path)
@@ -172,6 +176,89 @@ def test_remote_debug_api_accepts_configured_bearer_token(
         headers={"Authorization": "Bearer demo-test-token"},
     ) as remote:
         assert remote.get("/api/facts").status_code == 200
+        response = remote.post("/api/session/start")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert set(payload) == {"session_id", "opening", "review_items"}
+    assert "memory_pack" not in payload
+
+
+def test_legacy_console_consumes_sanitized_session_start_shape() -> None:
+    source = (FRONTEND_ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+
+    assert "start.review_items" in source
+    assert "start.memory_pack" not in source
+
+
+def test_remote_realtime_websocket_requires_debug_access(
+    isolated_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LING_ADMIN_TOKEN", raising=False)
+    from backend.app import app
+
+    with TestClient(app, client=("203.0.113.10", 50000)) as remote:
+        with pytest.raises(WebSocketDisconnect) as denied:
+            with remote.websocket_connect(
+                "/api/realtime/ws?session_id=private&provider=gemini"
+            ):
+                pass
+
+    assert denied.value.code == 1008
+
+
+def test_remote_realtime_websocket_accepts_configured_token(
+    isolated_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LING_ADMIN_TOKEN", "demo-test-token")
+
+    async def fake_bridge(ws, session_id: str, provider: str | None) -> None:
+        await ws.accept()
+        await ws.send_json({"session_id": session_id, "provider": provider})
+        await ws.close()
+
+    monkeypatch.setattr(realtime, "bridge", fake_bridge)
+    from backend.app import app
+
+    with TestClient(
+        app,
+        client=("203.0.113.10", 50000),
+        headers={"Authorization": "Bearer demo-test-token"},
+    ) as remote:
+        with remote.websocket_connect(
+            "/api/realtime/ws?session_id=private&provider=gemini"
+        ) as socket:
+            assert socket.receive_json() == {
+                "session_id": "private",
+                "provider": "gemini",
+            }
+
+
+def test_api_internal_errors_are_private_and_never_cached(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenExperience:
+        def child_world_now(self, _child_id: int):
+            raise RuntimeError("private internal detail")
+
+    monkeypatch.setattr(experience, "default_service", lambda **_kwargs: BrokenExperience())
+
+    response = client.get("/api/child/world/now")
+
+    assert response.status_code == 500
+    assert response.headers["cache-control"] == "private, no-store"
+    assert "private internal detail" not in response.text
+
+
+def test_legacy_console_does_not_offer_per_fact_deletion() -> None:
+    source = (FRONTEND_ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+
+    assert "api.del" not in source
+    assert 'class="del"' not in source
+    assert "/facts/${" not in source
 
 
 def test_loopback_reverse_proxy_is_not_treated_as_a_local_request(

@@ -7,17 +7,53 @@
 """
 import json
 import re
+import threading
 import uuid
+import weakref
+from collections import OrderedDict
 
 from . import db, life, memory
 
 SESSIONS: dict[str, dict] = {}
+CLOSED_SESSION_LIMIT = 32
+
+_CLOSED_SESSION_ORDER: OrderedDict[str, None] = OrderedDict()
+_SESSIONS_GUARD = threading.Lock()
+_SESSION_LOCKS = weakref.WeakValueDictionary()
+_SESSION_LOCKS_GUARD = threading.Lock()
 
 RETREAT_WORDS = ["不想", "无聊", "别说英语", "不要英语", "烦", "不学", "别教"]
 POSITIVE_ACKS = ["好", "哇", "喜欢", "真", "酷", "棒", "想", "嗯"]
 
 
 # ---------------------------------------------------------------- 会话生命周期
+
+
+def _session_lock(session_id: str):
+    with _SESSION_LOCKS_GUARD:
+        lock = _SESSION_LOCKS.get(session_id)
+        if lock is None:
+            lock = threading.RLock()
+            _SESSION_LOCKS[session_id] = lock
+        return lock
+
+
+def _is_closed(session: dict | None) -> bool:
+    return bool(session and session.get("closed") is True)
+
+
+def _active_session(session_id: str) -> dict | None:
+    with _SESSIONS_GUARD:
+        session = SESSIONS.get(session_id)
+        return None if _is_closed(session) else session
+
+
+def _prune_closed_sessions() -> None:
+    while len(_CLOSED_SESSION_ORDER) > CLOSED_SESSION_LIMIT:
+        oldest_id, _ = _CLOSED_SESSION_ORDER.popitem(last=False)
+        if _is_closed(SESSIONS.get(oldest_id)):
+            SESSIONS.pop(oldest_id, None)
+
 
 def start_session(child_id: int) -> dict:
     pack = memory.build_memory_pack(child_id)
@@ -32,7 +68,7 @@ def start_session(child_id: int) -> dict:
         "INSERT INTO sessions(child_id,started_at,transcript_json) VALUES(?,?,?)",
         (child_id, db.now(), "[]"),
     )
-    SESSIONS[session_id] = {
+    session = {
         "db_id": sid,
         "child_id": child_id,
         "pack": pack,
@@ -46,22 +82,47 @@ def start_session(child_id: int) -> dict:
         "idle_nudges": 0,       # 冷场主动发言预算；跨模型重连仍属于同一场
         "turn": 0,
     }
+    with _SESSIONS_GUARD:
+        SESSIONS[session_id] = session
+        _CLOSED_SESSION_ORDER.pop(session_id, None)
     db.execute("UPDATE session_agenda SET status='consumed' WHERE child_id=? AND date=?",
                (child_id, db.today()))
     return {"session_id": session_id, "opening": opening, "memory_pack": pack}
 
 
 def get_session(session_id: str):
-    return SESSIONS.get(session_id)
+    with _session_lock(session_id):
+        return _active_session(session_id)
+
+
+def close_session(session_id: str, finalize_callback):
+    """Finalize once, then retain only a bounded idempotency tombstone."""
+    with _session_lock(session_id):
+        with _SESSIONS_GUARD:
+            session = SESSIONS.get(session_id)
+            if _is_closed(session):
+                return session["result"]
+            if session is None:
+                return None
+
+        result = finalize_callback(session)
+
+        with _SESSIONS_GUARD:
+            SESSIONS[session_id] = {"closed": True, "result": result}
+            _CLOSED_SESSION_ORDER.pop(session_id, None)
+            _CLOSED_SESSION_ORDER[session_id] = None
+            _prune_closed_sessions()
+        return result
 
 
 def claim_idle_nudge(session_id: str, limit: int = 2) -> int | None:
     """领取一次冷场主动发言预算，返回本场第几次；超限时返回 None。"""
-    session = SESSIONS.get(session_id)
-    if not session or session.get("idle_nudges", 0) >= limit:
-        return None
-    session["idle_nudges"] = session.get("idle_nudges", 0) + 1
-    return session["idle_nudges"]
+    with _session_lock(session_id):
+        session = _active_session(session_id)
+        if not session or session.get("idle_nudges", 0) >= limit:
+            return None
+        session["idle_nudges"] = session.get("idle_nudges", 0) + 1
+        return session["idle_nudges"]
 
 
 def _save_transcript(s):
@@ -85,25 +146,27 @@ def _state_dict(s) -> dict:
 # 记账（编织追踪）+ 历史 + 落库，让记忆闭环与语音链路完全解耦。
 
 def record_voice_user(session_id: str, text: str):
-    s = SESSIONS.get(session_id)
-    text = (text or "").strip()
-    if not s or not text:
-        return
-    s["turn"] += 1
-    _track_child_message(s, text)
-    s["history"].append({"role": "user", "content": text})
-    _save_transcript(s)
+    with _session_lock(session_id):
+        s = _active_session(session_id)
+        text = (text or "").strip()
+        if not s or not text:
+            return
+        s["turn"] += 1
+        _track_child_message(s, text)
+        s["history"].append({"role": "user", "content": text})
+        _save_transcript(s)
 
 
 def record_voice_doll(session_id: str, text: str) -> dict | None:
-    s = SESSIONS.get(session_id)
-    text = (text or "").strip()
-    if not s or not text:
-        return None
-    _track_doll_reply(s, text)
-    s["history"].append({"role": "assistant", "content": text})
-    _save_transcript(s)
-    return _state_dict(s)
+    with _session_lock(session_id):
+        s = _active_session(session_id)
+        text = (text or "").strip()
+        if not s or not text:
+            return None
+        _track_doll_reply(s, text)
+        s["history"].append({"role": "assistant", "content": text})
+        _save_transcript(s)
+        return _state_dict(s)
 
 
 # ---------------------------------------------------------------- 编织追踪器
@@ -162,6 +225,7 @@ def _track_child_message(s, text: str):
         entity = _guess_entity(s)
         canon_text = f"{s['pack']['child_card'].get('name','孩子')}决定：{text.strip()[:40]}"
         life.add_canon(child_id, entity, canon_text, by_child=True)
+        life.advance_private_arc(child_id)
         if ev.get("id"):
             db.execute("UPDATE doll_events SET child_reaction=? WHERE id=?", (text.strip()[:60], ev["id"]))
         s["canon_written"].append({"entity": entity, "fact_text": canon_text})

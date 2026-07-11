@@ -14,7 +14,6 @@ const api = {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: body ? JSON.stringify(body) : undefined,
   }).then(responseJSON),
-  del: (p) => fetch(`/api${p}`, { method: "DELETE" }).then(responseJSON),
 };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 // 英文词高亮
@@ -584,7 +583,7 @@ VIEWS.chat = async () => {
     if (CHAT.sessionId) return true;
     try {
       const start = await api.post("/session/start");
-      CHAT = { sessionId: start.session_id, agenda: start.memory_pack.review_items || [], woven: [], produced: [] };
+      CHAT = { sessionId: start.session_id, agenda: start.review_items || [], woven: [], produced: [] };
       RT.idleNudgesSent = 0;
       renderAgenda();
       return true;
@@ -947,13 +946,12 @@ VIEWS.parent = async () => {
   </div>
   <div class="grid-2">
     <div class="card">
-      <h2>💡 事实记忆（L3） <span class="hint">点删除即从玩偶记忆里抹去</span></h2>
+      <h2>💡 事实记忆（L3） <span class="hint">后续经历会保留更新脉络</span></h2>
       ${facts.map(f => `
         <div class="fact-row ${f.superseded_by ? "superseded" : ""}">
           <span class="chip ${({ interest: "coral", family: "sky", fear: "violet", friend: "leaf" })[f.category] || "gold"}">${esc(f.category)}</span>
           <span>${esc(f.text)}</span>
           ${f.superseded_by ? '<span class="chip ghost">已被更新</span>' : ""}
-          <button class="del" data-id="${f.id}">删除</button>
         </div>`).join("")}
       <p style="font-size:12.5px;color:var(--ink-3);margin-top:10px">家长设定的边界话题：
         ${(STATE.taboo || []).map(t => `<span class="chip violet">🚫 ${esc(t)}</span>`).join("") || "无"}</p>
@@ -970,16 +968,6 @@ VIEWS.parent = async () => {
     </div>
   </div>`;
   drawGrowthChart($("#chart-box"), report.vocab_curve);
-  document.querySelectorAll(".fact-row .del").forEach(b => b.onclick = async () => {
-    const row = b.closest(".fact-row");
-    b.disabled = true;
-    const r = await api.del(`/facts/${b.dataset.id}`).catch(() => ({ ok: false }));
-    if (!r || r.ok === false) { b.disabled = false; toast("删除失败，请重试"); return; }
-    // 原地淡出移除，保住滚动位置（不再整页 route() 回顶）
-    row.style.transition = "opacity .2s"; row.style.opacity = "0";
-    setTimeout(() => row.remove(), 200);
-    toast("已从记忆里删除");
-  });
 };
 
 // 成长曲线：双序列折线（累计听懂 / 累计说出），带十字线 tooltip

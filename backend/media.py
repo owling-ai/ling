@@ -6,7 +6,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone as dt_timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 from zoneinfo import ZoneInfo
 
 from . import db
@@ -230,16 +230,39 @@ class MediaCatalog:
 
     @staticmethod
     def public_asset(asset: dict) -> dict:
+        def public_uri(value: str) -> str:
+            if value.startswith("/") or "://" in value:
+                return value
+            return f"/demo-media/{value}"
+
         return {
             "kind": asset["media_kind"],
-            "src": f'/demo-media/{asset["src"]}',
-            "poster": f'/demo-media/{asset["poster"]}',
+            "src": public_uri(asset["src"]),
+            "poster": public_uri(asset["poster"]),
             "mime_type": asset["mime_type"],
             "width": asset["width"],
             "height": asset["height"],
             "duration_ms": asset["duration_ms"],
             "alt": asset["alt"],
         }
+
+
+def asset_snapshot(asset: dict, *, provider: str) -> dict:
+    """Freeze every field needed to replay an already published render."""
+    provenance = asset.get("provenance")
+    if not isinstance(provenance, dict):
+        provenance = {}
+    return {
+        "asset_id": asset["asset_id"],
+        "media": MediaCatalog.public_asset(asset),
+        "sha256": dict(asset.get("sha256") or {}),
+        "provenance": {
+            **provenance,
+            "provider": provider,
+            "asset_group": asset["asset_group"],
+            "semantic_version": asset["semantic_version"],
+        },
+    }
 
 
 def load_manifests(
@@ -359,6 +382,16 @@ def select_world_event(doll_id: str, now: datetime, timezone: str) -> dict:
     return default_catalog().select_world_event(doll_id, now, timezone)
 
 
+class GenerationProvider(Protocol):
+    name: str
+
+    def submit(self, request: dict, *, conn=None) -> int: ...
+
+    def poll(self, job_id: int) -> str: ...
+
+    def result(self, job_id: int) -> dict: ...
+
+
 class MockMediaProvider:
     name = "mock"
 
@@ -433,10 +466,18 @@ class MockMediaProvider:
         else:
             status = "queued"
         if status != row["status"]:
-            db.execute(
-                "UPDATE generation_jobs SET status=?, updated_at=? WHERE id=? AND status=?",
-                (status, _iso(now), job_id, row["status"]),
-            )
+            if status == "succeeded":
+                db.execute(
+                    "UPDATE generation_jobs SET status=?,updated_at=? WHERE id=? "
+                    "AND status IN ('queued','running')",
+                    (status, _iso(now), job_id),
+                )
+            elif status == "running":
+                db.execute(
+                    "UPDATE generation_jobs SET status=?,updated_at=? WHERE id=? "
+                    "AND status='queued'",
+                    (status, _iso(now), job_id),
+                )
         final = db.q1("SELECT status FROM generation_jobs WHERE id=?", (job_id,))
         if not final:
             raise MediaNotFound(f"job not found: {job_id}")

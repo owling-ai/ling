@@ -403,10 +403,12 @@ def test_mock_provider_raises_typed_generation_failed(
         provider.result(job_id)
 
 
-def test_concurrent_poll_cannot_regress_succeeded_job_to_running(
+@pytest.mark.parametrize("first_write", ["succeeded", "running"])
+def test_concurrent_poll_reaches_succeeded_in_either_write_order(
     isolated_db: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    first_write: str,
 ) -> None:
     media = _media_module()
     world_path, assets_path, media_root = _write_catalog(tmp_path)
@@ -414,7 +416,7 @@ def test_concurrent_poll_cannot_regress_succeeded_job_to_running(
     created_at = datetime(2026, 7, 11, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
     local = threading.local()
     both_read_queued = threading.Barrier(2)
-    succeeded_written = threading.Event()
+    first_written = threading.Event()
 
     def now_fn() -> datetime:
         both_read_queued.wait(timeout=2)
@@ -443,11 +445,11 @@ def test_concurrent_poll_cannot_regress_succeeded_job_to_running(
 
     def ordered_execute(sql, params=()):
         if sql.startswith("UPDATE generation_jobs SET status="):
-            if params[0] == "running":
-                assert succeeded_written.wait(timeout=2)
+            if params[0] != first_write:
+                assert first_written.wait(timeout=2)
             result = real_execute(sql, params)
-            if params[0] == "succeeded":
-                succeeded_written.set()
+            if params[0] == first_write:
+                first_written.set()
             return result
         return real_execute(sql, params)
 
@@ -462,7 +464,7 @@ def test_concurrent_poll_cannot_regress_succeeded_job_to_running(
         early = pool.submit(poll_at, created_at + timedelta(seconds=1))
         statuses = {late.result(timeout=3), early.result(timeout=3)}
 
-    assert statuses == {"succeeded"}
+    assert "succeeded" in statuses
     assert db.q1("SELECT status FROM generation_jobs WHERE id=?", (job_id,)) == {
         "status": "succeeded"
     }

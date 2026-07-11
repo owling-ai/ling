@@ -47,7 +47,13 @@ _PROTECTED_API_PATHS = {
     "/api/report",
     "/api/world",
 }
-_PROTECTED_API_PREFIXES = ("/api/admin/", "/api/facts/")
+_PROTECTED_API_PREFIXES = (
+    "/api/admin/",
+    "/api/facts/",
+    "/api/session/",
+    "/api/volcengine/",
+    "/api/realtime/",
+)
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -77,14 +83,36 @@ def _is_local_request(request: Request) -> bool:
 def _has_debug_access(request: Request) -> bool:
     if _is_local_request(request):
         return True
+    return _has_admin_token(request.headers)
+
+
+def _has_admin_token(headers) -> bool:
     expected = os.environ.get("LING_ADMIN_TOKEN", "").strip()
-    scheme, separator, supplied = request.headers.get("authorization", "").partition(" ")
+    scheme, separator, supplied = headers.get("authorization", "").partition(" ")
     return bool(
         expected
         and separator
         and scheme.lower() == "bearer"
         and hmac.compare_digest(supplied.strip(), expected)
     )
+
+
+def _has_websocket_debug_access(ws: WebSocket) -> bool:
+    client_host = ws.client.host if ws.client else ""
+    if client_host == "testclient":
+        return True
+    has_proxy_headers = any(
+        ws.headers.get(header)
+        for header in ("forwarded", "x-forwarded-for", "x-real-ip")
+    )
+    destination_host = ws.url.hostname or ""
+    if (
+        not has_proxy_headers
+        and _is_loopback_host(client_host)
+        and _is_loopback_host(destination_host)
+    ):
+        return True
+    return _has_admin_token(ws.headers)
 
 
 def _is_protected_api(request: Request) -> bool:
@@ -110,7 +138,15 @@ async def protect_private_apis(request: Request, call_next):
             content={"detail": "该接口仅允许本机访问或使用管理令牌"},
         )
     else:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception:
+            if not is_api:
+                raise
+            response = JSONResponse(
+                status_code=500,
+                content={"detail": "服务暂时不可用，请稍后重试"},
+            )
     if is_api:
         response.headers["Cache-Control"] = "private, no-store"
     return response
@@ -125,10 +161,11 @@ DEMO_MEDIA = os.path.join(os.path.dirname(__file__), "demo_media")
 def startup():
     db.init_db()
     media.default_catalog(reload=True)
-    experience.default_service(reload=True)
+    experience_service = experience.default_service(reload=True)
     if not seed.is_seeded():
         seed.seed()
     seed.ensure_experience_seeded()
+    experience_service.backfill_published_asset_snapshots()
     info = llm.mode_info()
     rt = realtime.info()
     live = ", ".join(
@@ -225,7 +262,12 @@ def curriculum():
 def session_start():
     if not seed.is_seeded():
         raise HTTPException(400, "请先完成初始化")
-    return engine.start_session(CHILD_ID)
+    started = engine.start_session(CHILD_ID)
+    return {
+        "session_id": started["session_id"],
+        "opening": started["opening"],
+        "review_items": started["memory_pack"].get("review_items", []),
+    }
 
 
 class EndBody(BaseModel):
@@ -234,12 +276,15 @@ class EndBody(BaseModel):
 
 @app.post("/api/session/end")
 def session_end(body: EndBody):
-    s = engine.get_session(body.session_id)
-    if not s:
+    def finalize(session: dict) -> dict:
+        result = workers.process_session(session["db_id"])
+        moment = experience.default_service().settle_session(session, result)
+        return {**result, "moment": moment}
+
+    result = engine.close_session(body.session_id, finalize)
+    if result is None:
         raise HTTPException(404, "会话不存在")
-    result = workers.process_session(s["db_id"])
-    moment = experience.default_service().settle_session(s, result)
-    return {**result, "moment": moment}
+    return result
 
 
 # ---------------------------------------------------------------- 实时音视频（StepFun / Gemini Live / Volcengine RTC）
@@ -247,6 +292,9 @@ def session_end(body: EndBody):
 @app.websocket("/api/realtime/ws")
 async def realtime_ws(ws: WebSocket, session_id: str, provider: str | None = None):
     """浏览器与选定 WebSocket 实时模型之间的代理。"""
+    if not _has_websocket_debug_access(ws):
+        await ws.close(code=1008, reason="该接口仅允许本机访问或使用管理令牌")
+        return
     await realtime.bridge(ws, session_id, provider)
 
 

@@ -186,6 +186,7 @@ CREATE TABLE IF NOT EXISTS moments (
     story TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('rendering', 'published', 'failed')),
     published_asset_id TEXT,
+    published_asset_json TEXT,
     error_code TEXT DEFAULT '',
     created_at TEXT NOT NULL,
     published_at TEXT
@@ -195,6 +196,17 @@ CREATE INDEX IF NOT EXISTS idx_moments_child_day_status
     ON moments(child_id, local_date, status);
 CREATE INDEX IF NOT EXISTS idx_moments_child_created
     ON moments(child_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS world_assignments (
+    child_id INTEGER NOT NULL,
+    doll_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    event_version INTEGER NOT NULL,
+    variant_id TEXT NOT NULL,
+    snapshot_json TEXT NOT NULL,
+    assigned_at TEXT NOT NULL,
+    PRIMARY KEY (child_id, event_id, event_version)
+);
 
 CREATE TABLE IF NOT EXISTS generation_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -250,6 +262,11 @@ def init_db():
         )
     if "processing_started_at" not in session_columns:
         conn.execute("ALTER TABLE sessions ADD COLUMN processing_started_at TEXT")
+    moment_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(moments)").fetchall()
+    }
+    if "published_asset_json" not in moment_columns:
+        conn.execute("ALTER TABLE moments ADD COLUMN published_asset_json TEXT")
     conn.commit()
 
 

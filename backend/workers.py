@@ -7,20 +7,27 @@
 import json
 import re
 import threading
+import weakref
 from collections import Counter
 
 from . import db, life, llm, memory, prompts
 
+ALLOWED_EMOTIONS = {"开心", "兴奋", "平静", "难过", "害怕", "骄傲"}
+
 
 # ---------------------------------------------------------------- 会话后处理
 
-_SESSION_LOCKS: dict[int, threading.Lock] = {}
+_SESSION_LOCKS = weakref.WeakValueDictionary()
 _SESSION_LOCKS_GUARD = threading.Lock()
 
 
 def _session_lock(session_id_db: int):
     with _SESSION_LOCKS_GUARD:
-        return _SESSION_LOCKS.setdefault(session_id_db, threading.Lock())
+        lock = _SESSION_LOCKS.get(session_id_db)
+        if lock is None:
+            lock = threading.Lock()
+            _SESSION_LOCKS[session_id_db] = lock
+        return lock
 
 
 def process_session(session_id_db: int) -> dict:
@@ -48,6 +55,14 @@ def _process_session_locked(session_id_db: int) -> dict:
         transcript=transcript_text)) if llm.worker_live() else None
     if not isinstance(diary, dict) or "summary" not in diary:
         diary = _mock_diary(child_card, child_msgs, doll_msgs)
+    raw_emotions = diary.get("emotions")
+    diary["emotions"] = [
+        emotion
+        for emotion in raw_emotions
+        if isinstance(emotion, str) and emotion in ALLOWED_EMOTIONS
+    ] if isinstance(raw_emotions, list) else []
+    if not diary["emotions"]:
+        diary["emotions"] = ["平静"]
 
     known = [{"text": f["text"], "subject_key": f["subject_key"]}
              for f in memory.list_facts(child_id, active_only=True)]
