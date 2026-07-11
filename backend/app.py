@@ -7,7 +7,7 @@ import json
 import os
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from . import db, engine, life, llm, memory, realtime, seed, volcengine_rtc, workers  # noqa: E402
+from . import db, engine, experience, life, llm, media, memory, realtime, seed, volcengine_rtc, workers  # noqa: E402
 
 app = FastAPI(title="灵 · 共同成长玩偶记忆服务")
 
@@ -37,13 +37,17 @@ app.add_middleware(
 CHILD_ID = db.CHILD_ID
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
 DESIGN = os.path.join(os.path.dirname(__file__), "..", "design")
+DEMO_MEDIA = os.path.join(os.path.dirname(__file__), "demo_media")
 
 
 @app.on_event("startup")
 def startup():
     db.init_db()
+    media.default_catalog(reload=True)
+    experience.default_service(reload=True)
     if not seed.is_seeded():
         seed.seed()
+    seed.ensure_experience_seeded()
     info = llm.mode_info()
     rt = realtime.info()
     live = ", ".join(
@@ -153,8 +157,8 @@ def session_end(body: EndBody):
     if not s:
         raise HTTPException(404, "会话不存在")
     result = workers.process_session(s["db_id"])
-    engine.SESSIONS.pop(body.session_id, None)
-    return result
+    moment = experience.default_service().settle_session(s, result)
+    return {**result, "moment": moment}
 
 
 # ---------------------------------------------------------------- 实时音视频（StepFun / Gemini Live / Volcengine RTC）
@@ -312,6 +316,76 @@ def _vocab_curve():
     return curve
 
 
+# ---------------------------------------------------------------- 体验投影（孩子端 / 家长端）
+
+class PocketBody(BaseModel):
+    collected: bool
+
+
+class DemoMomentBody(BaseModel):
+    event_key: str
+    event_value: str
+    source_id: str = "rehearsal"
+
+
+@app.get("/api/child/world/now")
+def child_world_now():
+    return experience.default_service().child_world_now(CHILD_ID)
+
+
+@app.get("/api/child/feed")
+def child_feed():
+    return experience.default_service().child_feed(CHILD_ID)
+
+
+@app.get("/api/moments/{moment_id}")
+def moment_detail(moment_id: int):
+    try:
+        return experience.default_service().refresh_moment(moment_id)
+    except experience.ExperienceNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/pocket")
+def pocket():
+    return experience.default_service().pocket(CHILD_ID)
+
+
+@app.put("/api/pocket/{keepsake_id}")
+def set_pocket(keepsake_id: int, body: PocketBody):
+    try:
+        return experience.default_service().set_pocket(
+            CHILD_ID, keepsake_id, body.collected
+        )
+    except experience.ExperienceNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/api/parent/today")
+def parent_today():
+    return experience.default_service().parent_today(CHILD_ID)
+
+
+@app.get("/api/parent/growth")
+def parent_growth(period: str = "week"):
+    return experience.default_service().parent_growth(CHILD_ID, period=period)
+
+
+@app.get("/api/parent/memory")
+def parent_memory(
+    cursor: str | None = None,
+    limit: int = Query(default=20, ge=1, le=50),
+):
+    return experience.default_service().parent_memory(
+        CHILD_ID, cursor=cursor, limit=limit
+    )
+
+
+@app.get("/api/parent/guardian")
+def parent_guardian():
+    return experience.default_service().parent_guardian(CHILD_ID)
+
+
 # ---------------------------------------------------------------- 玩偶的世界（线上分身）
 
 @app.get("/api/world")
@@ -348,6 +422,20 @@ def admin_reflect():
     return workers.reflect(CHILD_ID)
 
 
+@app.post("/api/admin/demo-moment")
+def admin_demo_moment(body: DemoMomentBody):
+    field = experience.EVENT_VALUE_FIELDS.get(body.event_key)
+    if not field:
+        raise HTTPException(400, "不支持的演示事件")
+    return experience.default_service().settle_candidate(
+        CHILD_ID,
+        "demo",
+        body.source_id,
+        body.event_key,
+        {field: body.event_value},
+    )
+
+
 @app.post("/api/admin/reseed")
 def admin_reseed():
     return seed.seed()
@@ -355,6 +443,9 @@ def admin_reseed():
 
 # ---------------------------------------------------------------- 前端
 
+app.mount("/demo-media", StaticFiles(directory=DEMO_MEDIA), name="demo-media")
+app.mount("/child", StaticFiles(directory=os.path.join(FRONTEND, "child"), html=True), name="child-app")
+app.mount("/parent", StaticFiles(directory=os.path.join(FRONTEND, "parent"), html=True), name="parent-app")
 app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND, "assets")), name="assets")
 
 

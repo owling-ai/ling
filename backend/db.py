@@ -13,6 +13,7 @@ import json
 import os
 import sqlite3
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 
 DB_PATH = os.environ.get("LING_DB", os.path.join(os.path.dirname(__file__), "..", "data", "ling.db"))
@@ -168,6 +169,70 @@ CREATE TABLE IF NOT EXISTS sessions (
     processed INTEGER DEFAULT 0,
     cold_result_json TEXT DEFAULT '{}'
 );
+
+CREATE TABLE IF NOT EXISTS moments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    child_id INTEGER NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    event_key TEXT NOT NULL,
+    event_value TEXT NOT NULL,
+    semantic_version INTEGER NOT NULL DEFAULT 1,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    local_date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    story TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('rendering', 'published', 'failed')),
+    published_asset_id TEXT,
+    error_code TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    published_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_moments_child_day_status
+    ON moments(child_id, local_date, status);
+CREATE INDEX IF NOT EXISTS idx_moments_child_created
+    ON moments(child_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS generation_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    moment_id INTEGER NOT NULL,
+    attempt INTEGER NOT NULL,
+    media_kind TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    asset_group TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'failed')),
+    asset_id TEXT,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    ready_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    error_code TEXT DEFAULT '',
+    UNIQUE(moment_id, attempt)
+);
+
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_moment_attempt
+    ON generation_jobs(moment_id, attempt DESC);
+
+CREATE TABLE IF NOT EXISTS keepsakes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    child_id INTEGER NOT NULL,
+    moment_id INTEGER NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    appearance TEXT NOT NULL,
+    image_url TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pocket_entries (
+    child_id INTEGER NOT NULL,
+    keepsake_id INTEGER NOT NULL,
+    collected INTEGER NOT NULL DEFAULT 0 CHECK(collected IN (0, 1)),
+    collected_at TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (child_id, keepsake_id)
+);
 """
 
 
@@ -199,6 +264,22 @@ def execute(sql, params=()):
     cur = conn.execute(sql, params)
     conn.commit()
     return cur.lastrowid
+
+
+@contextmanager
+def transaction(immediate: bool = False):
+    """Run a small atomic unit without changing the existing auto-commit helpers."""
+    conn = get_conn()
+    if conn.in_transaction:
+        raise RuntimeError("nested database transactions are not supported")
+    conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+    try:
+        yield conn
+    except Exception:
+        conn.rollback()
+        raise
+    else:
+        conn.commit()
 
 
 def jloads(s, default=None):

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "world_version": "2026-07-11",
+  "timezone": "Asia/Shanghai",
+  "events": [
+    {
+      "event_id": "hill-wind",
+      "event_version": 1,
+      "title": "去山坡等风",
+      "summary": "灵灵带着积木风筝去等今天第一阵风。",
+      "asset_group": "world-hill-wind",
+      "timeline": [
+        {"at": "08:30", "text": "风筝线绕好了，就差风啦"},
+        {"at": "08:45", "text": "灵灵把 kite 举过了头顶"}
+      ]
+    },
+    {
+      "event_id": "star-count",
+      "event_version": 1,
+      "title": "在窗边数星星",
+      "summary": "灵灵给第七颗星星取了一个英文名字。",
+      "asset_group": "world-star-count",
+      "timeline": [
+        {"at": "20:15", "text": "它把今天的故事收进了枕头底下"},
+        {"at": "20:40", "text": "第七颗星星，它叫 seven"}
+      ]
+    },
+    {
+      "event_id": "sleep-stories",
+      "event_version": 1,
+      "title": "灵灵睡着了",
+      "summary": "橡树村安静下来，故事明早继续。",
+      "asset_group": "world-sleep-stories",
+      "timeline": [
+        {"at": "21:00", "text": "灵灵把小夜灯调暗，钻进了被窝"}
+      ]
+    }
+  ],
+  "schedule": [
+    {
+      "slot_id": "day",
+      "start": "06:00",
+      "end": "18:00",
+      "mode": "day",
+      "event_id": "hill-wind",
+      "event_version": 1
+    },
+    {
+      "slot_id": "night",
+      "start": "18:00",
+      "end": "21:00",
+      "mode": "night",
+      "event_id": "star-count",
+      "event_version": 1
+    },
+    {
+      "slot_id": "sleeping",
+      "start": "21:00",
+      "end": "06:00",
+      "mode": "sleeping",
+      "event_id": "sleep-stories",
+      "event_version": 1
+    }
+  ]
+}

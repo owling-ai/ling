@@ -1,0 +1,189 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "asset_id": "hill-wind-a",
+      "media_kind": "video",
+      "event_key": "base_world",
+      "event_value": "hill-wind",
+      "asset_group": "world-hill-wind",
+      "semantic_version": 1,
+      "src": "hill-wind-a.mp4",
+      "poster": "hill-wind-a.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "灵灵在山坡上举着红色风筝等风",
+      "sha256": {
+        "media": "85added46da13e955105c987854533eafe0f5876514a44a0990d110d490c76fa",
+        "poster": "ed7f9beaead417907825c19f62cb1eb9135a3b0199f11006d1ddd6fe0809a047"
+      }
+    },
+    {
+      "asset_id": "hill-wind-b",
+      "media_kind": "video",
+      "event_key": "base_world",
+      "event_value": "hill-wind",
+      "asset_group": "world-hill-wind",
+      "semantic_version": 1,
+      "src": "hill-wind-b.mp4",
+      "poster": "hill-wind-b.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "灵灵在另一面山坡上放黄色风筝",
+      "sha256": {
+        "media": "4c67ed59bc1c59e15f944dc6c750adc88728e98dfec9b88c7f07f83e77cf7007",
+        "poster": "c6ef217f287272f2f45d9e95e7edd2af00002c1b5b58bc75edbae744068dc300"
+      }
+    },
+    {
+      "asset_id": "star-count-a",
+      "media_kind": "video",
+      "event_key": "base_world",
+      "event_value": "star-count",
+      "asset_group": "world-star-count",
+      "semantic_version": 1,
+      "src": "growth-stars.mp4",
+      "poster": "growth-stars.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "灵灵在小夜灯旁数星星",
+      "sha256": {
+        "media": "b576e43c47d17337eaa87bad64e32e78d10fc29b0d6a4a90193d91222ffc0031",
+        "poster": "9def74d61218aede375a67a6958cd3ca5a6a84f311512c92688aafe404bbbafb"
+      }
+    },
+    {
+      "asset_id": "sleep-stories-a",
+      "media_kind": "video",
+      "event_key": "base_world",
+      "event_value": "sleep-stories",
+      "asset_group": "world-sleep-stories",
+      "semantic_version": 1,
+      "src": "growth-stars.mp4",
+      "poster": "growth-stars.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "橡树村的小夜灯亮着，灵灵已经睡着",
+      "sha256": {
+        "media": "b576e43c47d17337eaa87bad64e32e78d10fc29b0d6a4a90193d91222ffc0031",
+        "poster": "9def74d61218aede375a67a6958cd3ca5a6a84f311512c92688aafe404bbbafb"
+      }
+    },
+    {
+      "asset_id": "word-kite-v1",
+      "media_kind": "video",
+      "event_key": "word_taught",
+      "event_value": "kite",
+      "asset_group": "moment-word-kite",
+      "semantic_version": 1,
+      "src": "word-kite.mp4",
+      "poster": "word-kite.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "灵灵举着孩子教它认识的风筝",
+      "sha256": {
+        "media": "e7b0fd420e7229e7de346aa9f393717789245e995bee2d2f18b5f7983cc2519b",
+        "poster": "9b42ebad8996112bd50d65feb9a4a3568481aed098bd99d3deb693448c9b1421"
+      },
+      "moment": {
+        "title": "风筝终于飞起来啦",
+        "story": "你教会灵灵一个新词：kite。风一来，它就举着风筝大声喊 kite, fly!",
+        "keepsake": {
+          "name": "风筝牌牌",
+          "description": "第一次把 kite 说出口",
+          "appearance": "amber"
+        }
+      }
+    },
+    {
+      "asset_id": "choice-cake-v1",
+      "media_kind": "video",
+      "event_key": "canon_choice",
+      "event_value": "橡果味",
+      "asset_group": "moment-choice-cake",
+      "semantic_version": 1,
+      "src": "choice-cake.mp4",
+      "poster": "choice-cake.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "灵灵和刺猬阿姨做橡果味生日蛋糕",
+      "sha256": {
+        "media": "c58e13bcab4a505a4e4ee5a814f03e2f907b9e2ade2fa61de743276b25a4ea2c",
+        "poster": "718000e81aa077e49834f7f74c92d13bfc578cd4ba86203bf01e8f87a429af54"
+      },
+      "moment": {
+        "title": "生日蛋糕有答案啦",
+        "story": "你选了橡果味。灵灵和刺猬阿姨照着这个决定做好了蛋糕，这个味道从此写进你们的故事。",
+        "keepsake": {
+          "name": "橡果餐布",
+          "description": "一起决定生日蛋糕的味道",
+          "appearance": "clay"
+        }
+      }
+    },
+    {
+      "asset_id": "story-party-v1",
+      "media_kind": "video",
+      "event_key": "story_beat",
+      "event_value": "birthday_party",
+      "asset_group": "moment-story-party",
+      "semantic_version": 1,
+      "src": "story-party.mp4",
+      "poster": "story-party.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "橡树村挂起彩旗准备生日会",
+      "sha256": {
+        "media": "c7987292e1e578b9954117ff65fe4e1cd1d7c8e0d4b399feae6b2ab9d7d3ff5c",
+        "poster": "39049630ffbee31e1ad2ea217e6edfc3e81ae6b744358bddbfff65c6f715f2a2"
+      },
+      "moment": {
+        "title": "蓝秋千旁挂满彩旗",
+        "story": "生日会准备到了最热闹的一拍。灵灵把彩旗挂在蓝秋千旁，等你们一起揭晓惊喜。",
+        "keepsake": null
+      }
+    },
+    {
+      "asset_id": "growth-stars-v1",
+      "media_kind": "video",
+      "event_key": "growth_change",
+      "event_value": "fear_dark",
+      "asset_group": "moment-growth-stars",
+      "semantic_version": 1,
+      "src": "growth-stars.mp4",
+      "poster": "growth-stars.png",
+      "mime_type": "video/mp4",
+      "width": 720,
+      "height": 900,
+      "duration_ms": 4000,
+      "alt": "孩子和灵灵在小夜灯旁安心看星星",
+      "sha256": {
+        "media": "b576e43c47d17337eaa87bad64e32e78d10fc29b0d6a4a90193d91222ffc0031",
+        "poster": "9def74d61218aede375a67a6958cd3ca5a6a84f311512c92688aafe404bbbafb"
+      },
+      "moment": {
+        "title": "夜晚变得没那么可怕了",
+        "story": "你以前睡觉要开灯，现在有恐龙小夜灯就能安心看星星。灵灵把这次变化认真记了下来。",
+        "keepsake": {
+          "name": "星星小灯",
+          "description": "记住不再怕黑的那个晚上",
+          "appearance": "blue"
+        }
+      }
+    }
+  ]
+}
