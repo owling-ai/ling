@@ -19,7 +19,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 
-from . import engine, prompts, realtime
+from . import engine, prompts, realtime, voice_profiles
 
 
 APP_ID = os.environ.get("VOLCENGINE_RTC_APP_ID", "")
@@ -34,12 +34,15 @@ ARK_MODEL = os.environ.get(
 ASR_RESOURCE_ID = os.environ.get(
     "LING_VOLC_ASR_RESOURCE_ID", "volc.bigasr.sauc.duration"
 )
-TTS_RESOURCE_ID = os.environ.get(
-    "LING_VOLC_TTS_RESOURCE_ID", "volc.service_type.10029"
-)
-TTS_VOICE = os.environ.get(
-    "LING_VOLC_TTS_VOICE", "zh_female_linjianvhai_moon_bigtts"
-)
+GEMINI_LLM_URL = os.environ.get("LING_VOLC_GEMINI_LLM_URL", "").strip()
+GEMINI_LLM_MODEL = os.environ.get(
+    "LING_VOLC_GEMINI_MODEL", "gemini-3.1-flash-lite"
+).strip()
+GEMINI_OPENAI_URL = os.environ.get(
+    "LING_GEMINI_OPENAI_URL",
+    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+).strip()
+GEMINI_CALLBACK_TOKEN = secrets.token_urlsafe(32)
 TOKEN_TTL_SECONDS = int(os.environ.get("LING_VOLC_TOKEN_TTL_SECONDS", "3600"))
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("LING_VOLC_IDLE_TIMEOUT_SECONDS", "30"))
 VISION_INTERVAL_MS = int(os.environ.get("LING_VOLC_VISION_INTERVAL_MS", "1000"))
@@ -68,6 +71,70 @@ def missing_env() -> list[str]:
         "VOLCENGINE_SECRET_KEY": SECRET_KEY,
     }
     return [name for name, value in values.items() if not value]
+
+
+def gemini_llm_enabled() -> bool:
+    return bool(GEMINI_LLM_URL and os.environ.get("GEMINI_API_KEY"))
+
+
+def gemini_callback_authorized(authorization: str) -> bool:
+    scheme, separator, supplied = (authorization or "").partition(" ")
+    return bool(
+        separator
+        and scheme.lower() == "bearer"
+        and hmac.compare_digest(supplied.strip(), GEMINI_CALLBACK_TOKEN)
+    )
+
+
+def _gemini_openai_payload(payload: dict) -> dict:
+    allowed = {
+        "messages",
+        "temperature",
+        "max_tokens",
+        "top_p",
+        "tools",
+        "tool_choice",
+        "parallel_tool_calls",
+    }
+    upstream = {key: value for key, value in payload.items() if key in allowed}
+    upstream.update(
+        {
+            "model": GEMINI_LLM_MODEL,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+    )
+    return upstream
+
+
+def open_gemini_stream(payload: dict):
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not GEMINI_LLM_URL or not api_key:
+        raise RuntimeError("Gemini RTC callback is not configured")
+    body = json.dumps(
+        _gemini_openai_payload(payload), ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        GEMINI_OPENAI_URL,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    for attempt in range(2):
+        try:
+            return urllib.request.urlopen(request, timeout=10)
+        except urllib.error.HTTPError as exc:
+            if attempt or exc.code not in {429, 500, 502, 503, 504}:
+                raise
+            exc.close()
+        except urllib.error.URLError:
+            if attempt:
+                raise
+        time.sleep(0.15)
+    raise RuntimeError("Gemini upstream unavailable")
 
 
 def _pack_uint16(value: int) -> bytes:
@@ -200,7 +267,7 @@ def _openapi(action: str, payload: dict) -> dict:
     return result
 
 
-def prepare(session_id: str) -> dict:
+def prepare(session_id: str, voice_profile: str | None = None) -> dict:
     if not available():
         raise RuntimeError("missing " + ", ".join(missing_env()))
     if not engine.get_session(session_id):
@@ -217,10 +284,12 @@ def prepare(session_id: str) -> dict:
             "task_id": f"ling-task-{suffix}",
             "bot_id": f"ling-bot-{suffix}",
             "status": "prepared",
+            "voice_profile": voice_profiles.resolve_voice_profile(voice_profile),
             "recorded_subtitles": set(),
             "last_user_final_at": None,
         }
         TASKS[session_id] = task
+    profile = task.get("voice_profile") or voice_profiles.resolve_voice_profile()
     return {
         "app_id": APP_ID,
         "room_id": task["room_id"],
@@ -229,6 +298,65 @@ def prepare(session_id: str) -> dict:
         "bot_id": task["bot_id"],
         "token": create_rtc_token(task["room_id"], task["user_id"]),
         "expires_in": TOKEN_TTL_SECONDS,
+        "voice_profile": profile["id"],
+        "voice_name": profile["name"],
+    }
+
+
+def _vision_config() -> dict:
+    return {
+        "Enable": True,
+        "SnapshotConfig": {
+            "StreamType": 0,
+            "ImageDetail": "low",
+            "Height": 360,
+            "Interval": VISION_INTERVAL_MS,
+            "ImagesLimit": 1,
+        },
+    }
+
+
+def _llm_config(system_message: str) -> dict:
+    common = {
+        "SystemMessages": [system_message],
+        "HistoryLength": 10,
+        "Temperature": 0.7,
+        "MaxTokens": 180,
+        "Prefill": True,
+        "VisionConfig": _vision_config(),
+    }
+    if gemini_llm_enabled():
+        return {
+            **common,
+            "Mode": "CustomLLM",
+            "Url": GEMINI_LLM_URL,
+            "ModelName": GEMINI_LLM_MODEL,
+            "APIKey": GEMINI_CALLBACK_TOKEN,
+        }
+    return {
+        **common,
+        "Mode": "ArkV3",
+        "ModelName": ARK_MODEL,
+        "ThinkingType": "disabled",
+    }
+
+
+def _tts_config(profile: dict) -> dict:
+    parameters = {
+        "req_params": {
+            "speaker": profile["voice"],
+            "context_texts": [profile["style_instruction"]],
+            "audio_params": {"speech_rate": 0},
+        }
+    }
+    return {
+        "Provider": "volcano_bidirection",
+        "ProviderParams": {
+            "Credential": {"ResourceId": profile["resource_id"]},
+            "VolcanoTTSParameters": json.dumps(
+                parameters, ensure_ascii=False, separators=(",", ":")
+            ),
+        },
     }
 
 
@@ -236,6 +364,7 @@ def _start_payload(task: dict, pack: dict) -> dict:
     child_name = (pack.get("child_card") or {}).get("name", "小朋友")
     doll_name = (pack.get("doll_card") or {}).get("name", "灵灵")
     system_message = prompts.build_doll_system(pack) + realtime.VOICE_NOTE
+    profile = task.get("voice_profile") or voice_profiles.resolve_voice_profile()
     payload = {
         "AppId": APP_ID,
         "RoomId": task["room_id"],
@@ -254,33 +383,8 @@ def _start_payload(task: dict, pack: dict) -> dict:
                 },
             },
             "VADConfig": {"SilenceTime": 600},
-            "LLMConfig": {
-                "Mode": "ArkV3",
-                "ModelName": ARK_MODEL,
-                "SystemMessages": [system_message],
-                "HistoryLength": 10,
-                "Temperature": 0.7,
-                "MaxTokens": 180,
-                "ThinkingType": "disabled",
-                "Prefill": True,
-                "VisionConfig": {
-                    "Enable": True,
-                    "SnapshotConfig": {
-                        "StreamType": 0,
-                        "ImageDetail": "low",
-                        "Height": 360,
-                        "Interval": VISION_INTERVAL_MS,
-                        "ImagesLimit": 1,
-                    },
-                },
-            },
-            "TTSConfig": {
-                "Provider": "volcano_bidirection",
-                "ProviderParams": {
-                    "ResourceId": TTS_RESOURCE_ID,
-                    "audio": {"voice_type": TTS_VOICE, "speech_rate": 0},
-                },
-            },
+            "LLMConfig": _llm_config(system_message),
+            "TTSConfig": _tts_config(profile),
             "InterruptMode": 0,
             "SubtitleConfig": {"DisableRTSSubtitle": False, "SubtitleMode": 1},
         },
@@ -306,11 +410,20 @@ def start(session_id: str) -> dict:
     session = engine.get_session(session_id)
     if not task or not session:
         raise KeyError("session is not prepared")
+    profile = task.get("voice_profile") or voice_profiles.resolve_voice_profile()
+    result = {
+        "ok": True,
+        "task_id": task["task_id"],
+        "bot_id": task["bot_id"],
+        "voice_profile": profile["id"],
+        "voice_name": profile["name"],
+        "llm_provider": "gemini" if gemini_llm_enabled() else "ark",
+    }
     if task["status"] == "active":
-        return {"ok": True, "task_id": task["task_id"], "bot_id": task["bot_id"]}
+        return result
     _openapi("StartVoiceChat", _start_payload(task, session["pack"]))
     task["status"] = "active"
-    return {"ok": True, "task_id": task["task_id"], "bot_id": task["bot_id"]}
+    return result
 
 
 def observe(session_id: str) -> dict:

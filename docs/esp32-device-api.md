@@ -11,11 +11,10 @@ ESP32 可在隔离网络中复用浏览器 Demo 协议：
 ```text
 POST /api/session/start
 WS   /api/realtime/ws?session_id=<id>&provider=gemini|stepfun|minicpm
-     Gemini 可选 &voice_profile=cloudlet|starlight|moonlamp|honeydrop
 POST /api/session/end
 ```
 
-Gemini 未传或传入非法 `voice_profile` 时使用 `cloudlet`，因此设备端可以完全不增加配置字段。
+该兼容协议只能使用 Gemini Live 原声、StepFun 或 MiniCPM。`sunny` / `sprout` 原生童声当前依赖 ByteRTC，不走这条 WebSocket 媒体面。
 
 当前响应和限制：
 
@@ -24,7 +23,7 @@ Gemini 未传或传入非法 `voice_profile` 时使用 `cloudlet`，因此设备
 - Gemini：16 kHz PCM16 上行、24 kHz PCM16 下行、可发 JPEG。
 - StepFun：24 kHz PCM16 双向、无视频。
 - MiniCPM：设备仍按 16 kHz PCM16 上行，后端负责协议和格式转换；当前无用户 ASR。
-- 火山方案依赖浏览器 ByteRTC SDK，裸 ESP32 不能复用。
+- Gemini 童声和火山 Ark 方案依赖 ByteRTC；裸 ESP32 不能复用 Web SDK，需要 RTC 原生 SDK 或 Device Gateway。
 - 固定 `CHILD_ID=1`，没有设备鉴权或绑定。
 - `/api/session/end` 同步运行冷路径，可能耗时。
 - 实时会话主要保存在进程内，重启后不可恢复。
@@ -107,4 +106,5 @@ Offset  Size  Field
 
 ## Change log
 
+- `2026-07-11`：明确 Gemini 童声使用 ByteRTC，不能通过裸 ESP32 兼容 WebSocket 选择 profile。
 - `2026-07-11`：按当前代码修正 `session/start` 响应，加入 MiniCPM；删除把建议协议写成现有能力的内容，压缩为明确的未实现提案。

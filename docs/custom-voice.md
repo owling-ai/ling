@@ -1,194 +1,176 @@
-# Ling 定制音色可行性与实施方案
+# Ling 原生童声音色方案
 
-> 调研日期：2026-07-11
+> 验证日期：2026-07-11
 >
-> 分支：`feat/custom-voice`
->
-> Worktree：`/Users/liaoxingyi/workspace/ling-custom-voice`
+> 当前实现：Gemini 文本模型 + ByteRTC + 豆包语音合成大模型 2.0
 
 ## 1. 结论
 
-**能做，角色音色预设已经实现；复制音色继续保持实验状态。**
+旧版“小云朵 / 小星星 / 月亮灯 / 蜂蜜糖”已经移除。它们只是 Gemini 成人预置声线加角色提示，严格听感评审仍属于成年人装嫩，不能继续称为童声。
 
-1. **Gemini 角色音色预设：已实现。** 从 Gemini Live 支持的 30 个预置 voice 中选出 4 个适合儿童陪伴的底声，为每个 voice 固定角色化语气、节奏和表达约束，并用当前 Live 模型预生成同一句中文试听。用户选中的 profile 在建立 Live 会话时写入 `speechConfig`。这条路线保留当前音频到音频、低延迟、可打断和视频理解能力。
-2. **参考录音复制音色：协议可用，但暂列实验功能。** Google GenAI SDK 已公开 `replicatedVoiceConfig`、参考 WAV、授权 WAV 和授权签名字段；当前项目的 Gemini API Key 实测也能让 `gemini-3.1-flash-live-preview` 接受该配置并输出音频。不过 Gemini 产品文档尚未正式说明支持范围，且还没有使用合法真人样本验证相似度、中文表现和授权签名，因此不能直接作为默认生产能力。
+当前只保留两档通过真实 RTC 链路和跨情绪验证的原生童声：
 
-不建议首发时把 Google Cloud Text-to-Speech Instant Custom Voice 接到实时主链路。它能真正创建复制音色，但当前仅向 allowlist 用户开放，而且会迫使现有 Gemini 原生音频链路改成 ASR、文本模型、TTS 的级联架构，明显增加延迟、打断控制和故障面。
+| Profile | 服务端 voice | 听感年龄 | 评审结果 |
+|---|---|---:|---|
+| `sunny` / 小晴天 | `zh_male_tiancaitongsheng_uranus_bigtts` | 6-8 岁 | 通过 |
+| `sprout` / 小青芽 | `ICL_uranus_zh_female_jiaxiaozi_tob` | 7-9 岁 | 通过 |
 
-## 2. 当前项目基础
+两档都来自火山引擎官方 `seed-tts-2.0` 公版目录，未使用真人儿童录音、声音复制、DSP 升调或共振峰变换。前端只能提交 profile ID，不能透传任意 voice、模型版本或 TTS 参数。
 
-现有 Gemini Live 链路已经具备音色选择能力：
+## 2. 为什么不能继续使用 Gemini Live 预置 voice
 
-```json
-{
-  "generationConfig": {
-    "responseModalities": ["AUDIO"],
-    "speechConfig": {
-      "voiceConfig": {
-        "prebuiltVoiceConfig": {"voiceName": "Aoede"}
-      }
-    }
-  }
-}
-```
+Gemini Live 当前公开能力只能在预置 voice 中选择基础声线，并用自然语言限制语气。实际测试包括：
 
-当前实现位于 `backend/realtime.py`、`frontend/assets/app.js` 和 `frontend/assets/voices/`：
+- Gemini TTS 直接提示“8 岁自然中国儿童”；
+- `Leda`、`Puck`、`Achird`、`Zephyr`、`Autonoe` 等基础声线；
+- `1.08-1.20` 倍音高和共振相关处理；
+- 多轮匿名听感评审。
 
-- 服务端公开并允许前端选择 `cloudlet`、`starlight`、`moonlamp`、`honeydrop` 四个 profile ID；`legacy` 只用于服务端兼容旧配置；
-- 每个 profile 固定映射到底声、风格 instruction 和试听 URL；
-- 旧调试台支持单选、试听和本地保存，建连时传 `voice_profile`；
-- 未传或非法 ID 自动回退到默认 `cloudlet`；
-- `LING_GEMINI_VOICE_PROFILE` 可改服务端默认，`LING_GEMINI_VOICE` 只保留给 `legacy` 兼容模式；
-- 参考音频、授权音频和授权签名尚未进入产品链路。
+严格评审仍能听出成人声带底色、成熟咬字、夹嗓、卡通化或变调伪影。提示词可以改变表演方式，不能把成年人的声道和共鸣结构变成儿童。
 
-## 3. 首发角色音色预设
+Gemini Live 的实验 `replicatedVoiceConfig` 也没有作为替代：
 
-Gemini 官方说明 Live 原生音频模型可以使用 Gemini TTS 的 30 个预置 voice。当前提供四个差异足够明显、不过度模仿幼儿的角色方向：
+- 公开产品文档仍未完整说明支持范围；
+- 缺少合法成年声音提供者的参考录音、授权录音和授权签名；
+- 不允许复制儿童、卡通角色或权利来源不明的第三方声音；
+- 不能把另一家供应商的公版 voice 重新克隆进 Gemini。
 
-| Profile | Gemini voice | 听感方向 | 固定表达约束 |
-|---|---|---|---|
-| 小云朵 | `Leda` | 清亮、年轻、童真 | 自然轻软，语速略慢，句尾轻收，不夹嗓、不装婴儿 |
-| 小星星 | `Achird` | 亲切、好奇、活泼 | 带微笑感，反应灵动，兴奋度受控，避免持续高音量 |
-| 月亮灯 | `Vindemiatrix` | 温柔、安定、陪伴感 | 近距离讲故事感，停顿自然，不耳语，不拖长尾音 |
-| 蜂蜜糖 | `Sulafat` | 温暖、圆润、安心 | 温暖但不成熟说教，节奏舒展，情绪变化柔和 |
+## 3. 当前实时架构
 
-备选 voice：`Laomedeia`（更活泼）、`Puck`（更外向）、`Achernar`（更柔软）、`Callirrhoe`（更松弛）。
-
-这里的“预制”包含两部分：
-
-- 预制稳定的 profile 配置：底声、角色 prompt、显示名和回退 voice；
-- 预生成试听 WAV：四个 profile 使用同一段 8 至 12 秒中文台词，通过实际的 `gemini-3.1-flash-live-preview` 链路生成，避免用另一套 TTS 做出与真实通话不一致的试听。
-
-建议试听文案同时覆盖问候、情绪和中英混说：
-
-> 嗨，我是灵灵。今天见到你真开心！你想先聊小风筝，还是一起说 butterfly？
-
-### 预设方案的能力边界
-
-- voice 名称能稳定选择基础声线。
-- system instruction 能约束说话习惯，但 Gemini 3.1 Live 没有公开独立的音高、语速、气息等数值控制项，细节存在回合间波动。
-- Gemini TTS 的自然语言 style、accent、pace、tone 控制是官方明确能力，但 TTS 不是当前实时 Live 主链路。不能把 TTS 的精细可控程度直接等同于 Live。
-- `gemini-3.1-flash-live-preview` 不支持 affective dialog，因此不能依赖它自动随孩子语气改变声线；角色音色应由固定 profile 保持一致。
-
-## 4. Gemini 参考录音复制音色
-
-### 4.1 SDK 暴露的协议
-
-截至 2026-07-11，Google GenAI Python `2.11.0` 和 JavaScript `2.11.0` SDK 都包含以下配置：
-
-```json
-{
-  "replicatedVoiceConfig": {
-    "mimeType": "audio/wav",
-    "voiceSampleAudio": "<base64>",
-    "consentAudio": "<base64>"
-  }
-}
-```
-
-字段要求来自官方 SDK 类型：
-
-- `audio/wav`；
-- 16-bit signed little-endian；
-- 24 kHz；
-- `voiceSampleAudio` 是参考音色；
-- `consentAudio` 是声音所有者的授权录音；
-- 首次验证成功后，`setupComplete.voiceConsentSignature` 可在后续会话替代授权 WAV，以降低建连延迟；
-- SDK 明确提示授权签名可能过期，失效时请求会失败。
-
-Python SDK 从 2025-12 的 `1.54.0` 起加入 `ReplicatedVoiceConfig`，2026-03 的 `1.69.0` 起加入授权录音、授权签名和 Live setup response；JavaScript SDK 在 2025-12 的 `1.32.0` 加入复制音色，并在 2026-07 的 `2.11.0` 补齐授权签名类型。
-
-### 4.2 当前账号协议探测
-
-使用项目现有 API Key 对 `gemini-3.1-flash-live-preview` 做了最短建连和一句话生成探测，没有记录或提交任何真人声音：
-
-| 探测 | 结果 |
-|---|---|
-| `v1beta` + `Aoede` | setup 成功，正常生成“你好” |
-| `v1alpha` + `Aoede` | setup 成功 |
-| 无效预置 voice | WebSocket 以 1007 拒绝，提示找不到 voice |
-| 未知 voiceConfig 字段 | WebSocket 以 1007 拒绝，提示 unknown field |
-| `replicatedVoiceConfig` + 合规格式的静音 WAV | setup 成功，正常生成“你好”音频 |
-
-这证明当前 Live 服务端确实识别 `replicatedVoiceConfig`，不是简单忽略任意未知字段。但静音 WAV 不能证明音色复制质量，也没有得到授权签名；仍需声音所有者提供合法样本后才能完成端到端验收。
-
-当前账号的 `models.list` 不会列出 SDK 测试中曾出现的内部 voice-replication 专用模型，Gemini 产品文档也没有公开复制音色章节。因此该能力应视为 **未正式文档化的实验接口**，必须带 feature flag 和预置 voice 回退，不能形成单点依赖。
-
-### 4.3 最小合法验证素材
-
-要完成实验，需要同一个成年声音提供者录制两段素材：
-
-1. 一段约 8 至 10 秒、自然且有轻微情绪变化的普通话参考音频；
-2. 一段按 Google 要求文本录制的授权声明。
-
-实现前必须向 Google 确认 Gemini replicated voice 要求的准确授权文案；不能直接假设它与 Cloud TTS 的文案完全相同。不得伪造授权录音，也不建议复制儿童用户的声音。Ling 的“童真”应优先来自成年配音者或具有明确商用和合成授权的声音资产。
-
-## 5. Cloud TTS Instant Custom Voice 备选
-
-Google Cloud Text-to-Speech 的 Chirp 3 Instant Custom Voice 是公开文档化的真正复制音色方案：
-
-- 支持中文 `cmn-CN`；
-- 参考音频和授权音频各最长 10 秒，建议尽量接近 10 秒；
-- 支持流式 LINEAR16/PCM 和批量输出；
-- 生成 client-side voice cloning key，可并发复用；
-- 支持 0.25x 至 2x 语速控制；
-- 截至 2026-07-07，仍仅向 allowlist 用户开放，需要联系 Google Cloud 销售申请。
-
-它不能直接替换当前 Live setup 中的 voice。当前 Gemini 3.1 Live 原生音频模型只支持 AUDIO response modality，页面看到的 output transcription 是对已生成声音的附带识别，不是可以提前交给外部 TTS 的原始台词。因此接 Cloud TTS 需要重建为：
+为了保留 Gemini API，同时获得真正的童声，实时链路改为：
 
 ```text
-麦克风 -> 流式 ASR -> Gemini 文本模型 -> 流式 Cloud TTS -> 播放
+浏览器麦克风/摄像头
+  -> ByteRTC WebRTC
+  -> 火山流式 ASR、VAD、语音打断、视频抽帧
+  -> Ling 的鉴权 SSE 回调
+  -> Gemini OpenAI-compatible streaming API
+  -> 火山双向流 seed-tts-2.0
+  -> ByteRTC 下行音频与字幕
 ```
 
-这会失去或重做原生音频模型的语气理解、全双工打断、输出转写对齐和一部分视频实时语义。除非 Gemini replicated voice 最终不可用且产品强依赖声音复制，否则不应优先走这条路线。
+关键实现：
 
-## 6. 实施顺序
+- `backend/voice_profiles.py`：服务端童声白名单和默认回退；
+- `backend/volcengine_rtc.py`：RTC 任务、Gemini CustomLLM 配置、TTS profile 和 OpenAI payload 过滤；
+- `POST /integrations/volcengine/gemini`：只供火山云端调用的 SSE 适配端点；
+- `frontend/assets/app.js`：试听、单选、持久化和通话中锁定；
+- `frontend/assets/voices/manifest.json`：公开试听来源、profile、哈希和评审结果，不包含上游 voice ID。
 
-### 阶段 A：角色音色预设，已完成
+这不是 Gemini Live 原生音频到音频模式。它保留了 Gemini 模型、流式响应、语音打断和视频理解能力，但需要 ASR、文本模型和 TTS 级联。2026-07-11 的三次本机到云端真实测试中，从服务端触发到完整回复字幕为 `2.2-3.7s`；其中一次无视频测试检测到首个非静音下行音频约 `2.58s`。这些数字不能宣传成 Gemini Live 原生首包延迟。
 
-1. 服务端 profile registry 已包含 `id`、显示名、Gemini voice、角色语气约束和试听 URL。
-2. `_gemini_setup(pack, voice_profile)` 只接受 allowlist ID，禁止前端透传任意上游字段。
-3. 受保护的旧调试台已提供四个音色的试听和单选；通话中锁定选择。
-4. 四段试听已由实际 Live 模型生成，manifest 记录模型、日期、转写、时长和 SHA-256。
-5. 非法 profile 回退到默认 `Leda`。
-6. setup payload、非法 profile、默认回退、provider info、WebSocket 参数和 WAV 静态服务均有测试覆盖。
+## 4. Profile 约束
 
-仍需在目标玩偶扬声器上验收长短句一致性、打断尾音和连续 10 轮的角色稳定性。
+两个 profile 都固定使用以下 TTS 原生上下文：
 
-### 阶段 B：复制音色实验，需要授权录音
+> 请用自然、放松、生活化的日常语气说话，减少表演感。不要夹嗓，不要使用夸张卡通腔，不要故意拖长尾音。像一个八九岁的小朋友跟熟悉的同伴正常聊天。
 
-1. 增加 `LING_GEMINI_VOICE_MODE=replicated` feature flag，默认关闭。
-2. 仅从后端私有存储读取参考 WAV、授权 WAV和授权签名，绝不提交 Git 或下发浏览器。
-3. 启动时验证 WAV 的声道、位深、采样率、时长和大小。
-4. 首次获得授权签名后加密保存；签名失效时重新提交授权 WAV。
-5. setup 或生成失败时自动回退到已选预置 profile，不能让通话不可用。
-6. 对比预置 profile 与复制音色的首包延迟、相似度、中文自然度、中英切换和 20 轮稳定性。
+该约束通过 `VolcanoTTSParameters.req_params.context_texts` 随 RTC 任务持续生效，不修改音高，也不做播放端后处理。
 
-只有在合法真人样本实测通过、Google 确认可用范围后，才把复制音色从实验开关升级为产品能力。
+默认 profile 为 `sunny`。环境变量 `LING_VOLC_VOICE_PROFILE` 只接受 `sunny` 或 `sprout`；未传、非法或已经删除的 ID 都回退到 `sunny`。profile 在 `/api/volcengine/prepare` 时绑定，通话中不能切换。
 
-## 7. 数据与合规要求
+## 5. 评审方法
 
-声音样本、授权录音和授权签名都按敏感生物特征数据处理：
+### 5.1 目录筛选
 
-- 不进入 Git、日志、分析事件或前端 localStorage；
-- 原型期使用权限为 `0600` 的服务端文件，生产期使用加密对象存储和最小权限；
-- 明确记录声音所有者、用途、授权版本、创建时间和删除状态；
-- 提供撤销和彻底删除流程；
-- 不允许用户上传第三方名人、儿童或无法证明权利来源的声音；
-- 试听素材不得包含真实孩子姓名或任何个人信息。
+通过火山 `ListSpeakers` 拉取 `seed-tts-1.0` 和 `seed-tts-2.0` 共 575 个 voice，先按供应商 `Age`、语言和描述筛选，再排除：
 
-## 8. 最终建议
+- 明显影射现成动画、游戏或卡通角色的 voice；
+- “少女、学妹、女友”等恋爱向青年声；
+- 少儿故事主持、成年幼教或客服声；
+- 夸张卡通腔、夹子音和仅靠高音模拟幼儿的 voice。
 
-阶段 A 已交付“小云朵 / 小星星 / 月亮灯 / 蜂蜜糖”四个可试听 profile，默认使用“小云朵”。它以较低风险改善现有音色，并完整保留 Gemini Live 的交互体验。
+供应商的“儿童”标签不是通过条件。多个官方标注儿童的 voice 在匿名评审中仍被判定为成年人装嫩或角色配音。
 
-阶段 B 仍需等一组成年声音提供者的合法参考和授权录音后才能启用。Google Cloud TTS 只保留为复制音色无法稳定使用时的后备路线。
+### 5.2 实际 RTC 样本
 
-## 9. 官方依据
+候选音频不是官网试听。浏览器实际加入 ByteRTC 房间，订阅 AI 远端音轨，并用 `ExternalTextToSpeech` 让生产 TTS 配置播报统一台词；录回 WebM 后转换为 24 kHz、单声道、16-bit PCM WAV。
+
+最终 profile 还分别测试了三类文案：
+
+1. 日常观察与提问；
+2. 安慰孩子答错题；
+3. 兴奋回应孩子画的恐龙。
+
+只有跨文案保持儿童声道听感、低成人模仿风险和低卡通风险的候选才进入白名单。没有为了凑足四档而保留不稳定声线。
+
+### 5.3 通过门槛
+
+匿名评审使用 `gemini-3.1-pro-preview`，要求：
+
+- `child_likeness >= 7`；
+- `adult_imitation_risk <= 3`；
+- `cartoon_risk <= 4`；
+- `long_chat_comfort >= 7`；
+- 听感年龄主要落在 6-11 岁；
+- 普通话和中英切换自然；
+- 无明显变调、电音、断句或链路伪影。
+
+最终双语试听两档均得到：儿童听感 `8/10`、成人装嫩风险 `2/10`、卡通风险 `3/10`、普通话自然度 `8/10`、长聊舒适度 `8/10`、合成伪影 `2/10`。
+
+试听文件由 `scripts/validate_voice_previews.py` 校验格式、时长、SHA-256、削波和评审门槛。
+
+### 5.4 完整 ASR / 视频回路
+
+最终实现另用 Chromium 假麦克风和假摄像头验证完整生产任务，而不是只调用外部文本播报：
+
+- ASR 将测试输入完整定稿为“你好灵灵，你看得到我吗？我手里拿着什么颜色的东西？”；
+- Gemini 在 ASR 定稿后约 `1.1s` 返回首段完整字幕；
+- 回复继续说明“是亮亮的绿色”，与假摄像头画面一致，证明图片内容经过 CustomLLM 回调到达 Gemini；
+- `sprout` 下行录音为有效 Opus 音轨，转为 WAV 后包含完整欢迎和回复语音；
+- 测试中一次 Gemini 建连发生瞬时 `URLError`，火山重试后成功；当前后端也只在尚未建立 SSE 响应时短重试一次。
+
+这组结果验证了 `ByteRTC ASR -> Gemini SSE -> seed-tts-2.0 -> ByteRTC`，但不代替真实儿童说话、家庭 Wi-Fi、回声消除和玩偶扬声器环境测试。
+
+## 6. 配置
+
+```bash
+GEMINI_API_KEY=...
+VOLCENGINE_RTC_APP_ID=...
+VOLCENGINE_RTC_APP_KEY=...
+VOLCENGINE_ACCESS_KEY=...
+VOLCENGINE_SECRET_KEY=...
+
+LING_VOLC_GEMINI_LLM_URL=https://ling.example.com/integrations/volcengine/gemini
+LING_VOLC_GEMINI_MODEL=gemini-3.1-flash-lite
+LING_VOLC_VOICE_PROFILE=sunny
+LING_REALTIME_PROVIDER=volcengine
+```
+
+`LING_VOLC_GEMINI_LLM_URL` 必须是公网 HTTPS URL，并路由到运行当前进程的同一个 Ling 服务。若未配置，火山 RTC 回退到 Ark；Gemini Live 原声仍可作为独立调试 provider，但不再提供或展示伪童声 profile。
+
+## 7. 回调安全
+
+Gemini 回调与调试 API 使用不同鉴权边界：
+
+- 每次服务启动生成一个 256-bit 随机 Bearer Token；
+- Token 只写入该 RTC 任务的 `LLMConfig.APIKey`，不进入前端、数据库或 manifest；
+- 回调端点使用常量时间比较验证 Token；
+- Gemini API Key 只用于 Ling 后端到 Google 的请求，不会发给火山；
+- 传给 Gemini 的请求体采用字段白名单，丢弃火山自定义数据和业务 trace；
+- 服务重启后旧 Token 立即失效，旧 RTC 任务也不能继续调用新进程。
+
+## 8. 已知边界
+
+- 级联链路延迟高于 Gemini Live 原生音频；应继续测量首音频帧，而不只测字幕。
+- Gemini 文本模型无法直接获得原生音频模型全部的语气理解信息；当前依赖 ASR 文本和视频帧。
+- `seed-tts-2.0` 仍是生成模型，极端文本下可能出现演绎波动；生产前需要目标玩偶扬声器上的 20 轮长聊验收。
+- ESP32 不能直接使用 ByteRTC Web SDK。硬件端需要 RTC 原生 SDK、网关或独立设备协议。
+- profile 是公版合成声，不代表真实儿童身份，也不得用于冒充某个真人。
+
+## 9. 复制音色边界
+
+真正的参考录音复制仍保持实验状态。未来若继续，必须使用同一位成年声音提供者的合法参考录音和授权录音，并满足撤销、删除、加密存储和最小权限要求。以下内容始终禁止：
+
+- 录制或复制儿童用户的声音作为玩偶默认声；
+- 复制名人、动画角色、游戏角色或无权使用的第三方 voice；
+- 伪造授权录音或授权签名；
+- 将参考录音、签名或生物特征数据提交到 Git、日志或前端存储。
+
+## 10. 官方依据
 
 - [Gemini Live API capabilities](https://ai.google.dev/gemini-api/docs/live-api/capabilities)
-- [Gemini speech generation and 30 voice options](https://ai.google.dev/gemini-api/docs/speech-generation)
-- [Gemini 3.1 Flash Live Preview](https://ai.google.dev/gemini-api/docs/models/gemini-3.1-flash-live-preview)
-- [Google GenAI JavaScript SDK types](https://github.com/googleapis/js-genai/blob/main/src/types.ts)
-- [Google GenAI JavaScript SDK changelog](https://github.com/googleapis/js-genai/blob/main/CHANGELOG.md)
-- [Google GenAI Python SDK changelog](https://github.com/googleapis/python-genai/blob/main/CHANGELOG.md)
-- [Chirp 3 Instant Custom Voice](https://cloud.google.com/text-to-speech/docs/chirp3-instant-custom-voice)
+- [Gemini OpenAI compatibility](https://ai.google.dev/gemini-api/docs/openai)
+- [火山引擎 StartVoiceChat](https://www.volcengine.com/docs/6348/1558163)
+- [火山引擎接入第三方大模型或 Agent](https://www.volcengine.com/docs/6348/1399966)
+- [豆包语音合成大模型双向流 API](https://www.volcengine.com/docs/6561/1329505)

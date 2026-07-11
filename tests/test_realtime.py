@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from backend import engine, realtime
+from backend import engine, realtime, voice_profiles
 
 
 class _RejectedConnection(Exception):
@@ -81,52 +81,54 @@ def test_bridge_reports_stepfun_quota_instead_of_exception_name(
     ]
 
 
-def test_gemini_voice_profiles_expose_only_bundled_safe_choices() -> None:
-    profiles = [
-        profile
-        for profile in realtime.gemini_voice_profiles()
-        if profile["id"] != "legacy"
-    ]
+def test_gemini_child_rtc_is_the_default_when_hybrid_callback_is_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LING_REALTIME_PROVIDER", raising=False)
+    monkeypatch.setattr(realtime, "VOLC_USES_GEMINI", True)
+    monkeypatch.setattr(realtime, "provider_available", lambda name: name != "minicpm")
 
-    assert [profile["id"] for profile in profiles] == [
-        "cloudlet",
-        "starlight",
-        "moonlamp",
-        "honeydrop",
-    ]
-    assert [profile["voice"] for profile in profiles] == [
-        "Leda",
-        "Achird",
-        "Vindemiatrix",
-        "Sulafat",
-    ]
+    assert realtime.default_provider() == "volcengine"
+
+
+def test_child_voice_profiles_expose_only_bundled_safe_choices() -> None:
+    profiles = voice_profiles.public_voice_profiles()
+
+    assert [profile["id"] for profile in profiles] == ["sunny", "sprout"]
     assert all(profile["preview_url"].endswith(".wav") for profile in profiles)
+    assert all("voice" not in profile for profile in profiles)
+    assert all("resource_id" not in profile for profile in profiles)
     assert all("style_instruction" not in profile for profile in profiles)
 
 
-def test_gemini_voice_profile_resolver_falls_back_to_cloudlet() -> None:
-    assert realtime.resolve_gemini_voice_profile("moonlamp")["voice"] == "Vindemiatrix"
-    assert realtime.resolve_gemini_voice_profile("not-a-profile")["id"] == "cloudlet"
+def test_child_voice_profile_resolver_falls_back_to_sunny() -> None:
+    assert voice_profiles.resolve_voice_profile("sprout")["voice"] == (
+        "ICL_uranus_zh_female_jiaxiaozi_tob"
+    )
+    assert voice_profiles.resolve_voice_profile("not-a-profile")["id"] == "sunny"
 
 
-def test_gemini_setup_uses_profile_voice_and_style_instruction() -> None:
+def test_native_gemini_setup_uses_only_legacy_prebuilt_voice() -> None:
     pack = {"doll_card": {"name": "灵灵"}, "child_card": {"name": "悠悠"}}
 
-    setup = realtime._gemini_setup(pack, "starlight")["setup"]
+    setup = realtime._gemini_setup(pack)["setup"]
     voice = setup["generationConfig"]["speechConfig"]["voiceConfig"]
     instruction = setup["systemInstruction"]["parts"][0]["text"]
 
-    assert voice == {"prebuiltVoiceConfig": {"voiceName": "Achird"}}
-    assert "小星星" in instruction
-    assert "不要主持、播音或广告腔" in instruction
+    assert voice == {"prebuiltVoiceConfig": {"voiceName": realtime.GEMINI_VOICE}}
+    assert "固定声音角色" not in instruction
 
 
-def test_realtime_info_publishes_default_gemini_profile() -> None:
+def test_realtime_info_publishes_default_child_profile_without_upstream_ids() -> None:
     info = realtime.info()
 
-    assert info["default_gemini_voice_profile"] in {
-        profile["id"] for profile in info["gemini_voice_profiles"]
+    assert "model" not in info
+    assert "voice" not in info
+    assert all("model" not in provider for provider in info["providers"].values())
+    assert all("voice" not in provider for provider in info["providers"].values())
+    assert info["default_voice_profile"] in {
+        profile["id"] for profile in info["voice_profiles"]
     }
-    assert info["providers"]["gemini"]["voice_profile"] == info[
-        "default_gemini_voice_profile"
+    assert info["providers"]["volcengine"]["voice_profile"] == info[
+        "default_voice_profile"
     ]

@@ -7,11 +7,12 @@ import json
 import hmac
 import ipaddress
 import os
+import urllib.error
 from datetime import datetime, timedelta
 
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -233,7 +234,7 @@ def state():
         "doll": memory.get_card(CHILD_ID, "doll"),
         "taboo": db.jloads(child["taboo_json"]) if child else [],
         "agenda_ready": agenda is not None and agenda["status"] == "ready",
-        "llm": llm.mode_info(),
+        "llm": {"worker_available": llm.worker_live()},
         "realtime": realtime.info(),
     }
 
@@ -339,23 +340,17 @@ async def realtime_ws(
     session_id: str,
     provider: str | None = None,
     video: bool = False,
-    voice_profile: str | None = None,
 ):
     """浏览器与选定 WebSocket 实时模型之间的代理。"""
     if not _has_websocket_debug_access(ws):
         await ws.close(code=1008, reason="该接口仅允许本机访问或使用管理令牌")
         return
-    await realtime.bridge(
-        ws,
-        session_id,
-        provider,
-        video,
-        voice_profile=voice_profile,
-    )
+    await realtime.bridge(ws, session_id, provider, video)
 
 
 class VolcSessionBody(BaseModel):
     session_id: str
+    voice_profile: str | None = None
 
 
 class VolcSubtitleBody(BaseModel):
@@ -367,11 +362,41 @@ class VolcSubtitleBody(BaseModel):
     definite: bool = False
 
 
+@app.post("/integrations/volcengine/gemini")
+def volcengine_gemini_callback(request: Request, body: dict):
+    """Authenticated OpenAI-compatible SSE adapter used by Volcengine RTC."""
+    if not volcengine_rtc.gemini_callback_authorized(
+        request.headers.get("authorization", "")
+    ):
+        raise HTTPException(401, "invalid callback token")
+    try:
+        upstream = volcengine_rtc.open_gemini_stream(body)
+    except (RuntimeError, urllib.error.HTTPError, urllib.error.URLError) as exc:
+        print(
+            f"[volcengine] Gemini callback failed: {type(exc).__name__}",
+            flush=True,
+        )
+        raise HTTPException(502, "Gemini upstream unavailable") from exc
+
+    def stream():
+        try:
+            for line in upstream:
+                yield line
+        finally:
+            upstream.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/volcengine/prepare")
 def volcengine_prepare(body: VolcSessionBody):
     """Issue a short-lived ByteRTC token after the user clicks Connect."""
     try:
-        return volcengine_rtc.prepare(body.session_id)
+        return volcengine_rtc.prepare(body.session_id, body.voice_profile)
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from exc
     except RuntimeError as exc:

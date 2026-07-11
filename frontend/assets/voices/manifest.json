@@ -1,48 +1,46 @@
 {
-  "model": "gemini-3.1-flash-live-preview",
+  "pipeline": "production-rtc-recording",
   "sample_rate": 24000,
   "preview_text": "嗨，我是灵灵。今天见到你真开心！你想先聊小风筝，还是一起说 butterfly？",
-  "generated_at": "2026-07-11T10:14:48.159465+00:00",
+  "generated_at": "2026-07-11T12:48:47Z",
   "profiles": [
     {
-      "id": "cloudlet",
-      "name": "小云朵",
-      "voice": "Leda",
-      "description": "清亮轻软，自然童真",
-      "file": "cloudlet.wav",
-      "duration_seconds": 10.12,
-      "transcript": "嗨，我是 灵灵。 今天 见到 你 真 开心！ 你想 先 聊 小 风筝， 还是 一起 说 butterfly？",
-      "sha256": "6871d4e41fb977fcd2de25dae4ae1de665df5d8eb8cec0389484979263d0bac5"
+      "id": "sunny",
+      "name": "小晴天",
+      "description": "清亮自然，灵动但不吵闹",
+      "file": "sunny.wav",
+      "duration_seconds": 10.005,
+      "review_transcript": "嗨，我是玲玲，今天见到你真开心，你想先聊小风筝，还是一起说 butterfly？",
+      "review": {
+        "perceived_age": "6-8",
+        "child_likeness": 8,
+        "adult_imitation_risk": 2,
+        "cartoon_risk": 3,
+        "mandarin_naturalness": 8,
+        "long_chat_comfort": 8,
+        "synthetic_artifacts": 2,
+        "verdict": "pass"
+      },
+      "sha256": "534809fb3712a5276151e9f6face1c6df334317c6898ab51b14133ef04a18a46"
     },
     {
-      "id": "starlight",
-      "name": "小星星",
-      "voice": "Achird",
-      "description": "亲切灵动，带着好奇",
-      "file": "starlight.wav",
-      "duration_seconds": 7.61,
-      "transcript": "嗨，我是灵灵。今天见到你真开心！你想先聊小风筝，还是一起说butterfly？",
-      "sha256": "f3a992685632154bd92dc6a21131936cc09ddb22a0db1e582e6c535542a81c7b"
-    },
-    {
-      "id": "moonlamp",
-      "name": "月亮灯",
-      "voice": "Vindemiatrix",
-      "description": "轻柔安定，故事感",
-      "file": "moonlamp.wav",
-      "duration_seconds": 8.731,
-      "transcript": "嗨我是灵灵今天见到你真开心你想先聊小风筝还是一起说 butterfly",
-      "sha256": "224aeb2a4e25160b602ea93af230905c9d369c8e0a4d79e4c6600e9d5654307f"
-    },
-    {
-      "id": "honeydrop",
-      "name": "蜂蜜糖",
-      "voice": "Sulafat",
-      "description": "温暖圆润，很有陪伴感",
-      "file": "honeydrop.wav",
-      "duration_seconds": 8.35,
-      "transcript": "嗨我是灵灵今天见到你真开心你想先聊小风筝还是一起说 butterfly",
-      "sha256": "faf5d352ed99b5b9b542f836b884616f2d3e6278485ec9c38e883c23063002f0"
+      "id": "sprout",
+      "name": "小青芽",
+      "description": "松弛亲切，活泼但不做作",
+      "file": "sprout.wav",
+      "duration_seconds": 8.594,
+      "review_transcript": "嗨，我是玲玲，今天见到你真开心。你想先聊小风筝，还是一起说 butterfly？",
+      "review": {
+        "perceived_age": "7-9",
+        "child_likeness": 8,
+        "adult_imitation_risk": 2,
+        "cartoon_risk": 3,
+        "mandarin_naturalness": 8,
+        "long_chat_comfort": 8,
+        "synthetic_artifacts": 2,
+        "verdict": "pass"
+      },
+      "sha256": "25eb6993d4814b901467ad2d4a73ca7c2551eeb57017d56a063e94d2a12168d8"
     }
   ]
 }

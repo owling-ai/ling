@@ -56,7 +56,7 @@ async function route() {
   const badge = $("#llm-badge");
   const liveProviders = Object.entries(STATE.realtime?.providers || {})
     .filter(([, config]) => config.available)
-    .map(([name]) => ({ gemini: "Gemini", stepfun: "StepFun", minicpm: "MiniCPM", volcengine: "火山 RTC" })[name] || name);
+    .map(([name, config]) => config.short_label || name);
   badge.textContent = liveProviders.length
     ? `📞 ${liveProviders.join(" + ")}`
     : "😴 未配置实时模型";
@@ -164,10 +164,10 @@ VIEWS.home = async () => {
 VIEWS.chat = async () => {
   const doll = STATE.doll;
   const providers = STATE.realtime?.providers || {};
-  const providerLabel = name => ({
-    gemini: "Gemini Live", stepfun: "StepFun", minicpm: "MiniCPM-o 4.5", volcengine: "火山引擎 RTC",
+  const providerLabel = name => providers[name]?.label || ({
+    gemini: "Gemini 原声", stepfun: "StepFun", minicpm: "MiniCPM-o 4.5", volcengine: "火山 RTC",
   })[name] || name;
-  const providerButtonLabel = name => ({
+  const providerButtonLabel = name => providers[name]?.short_label || ({
     gemini: "Gemini", stepfun: "StepFun", minicpm: "MiniCPM", volcengine: "火山 RTC",
   })[name] || name;
   let selectedProvider = localStorage.getItem("ling-realtime-provider") || STATE.realtime?.default_provider || "gemini";
@@ -175,12 +175,12 @@ VIEWS.chat = async () => {
     selectedProvider = Object.keys(providers).find(name => providers[name].available) || selectedProvider;
   }
   const selectedConfig = () => providers[selectedProvider] || {};
-  const voiceProfiles = STATE.realtime?.gemini_voice_profiles || [];
+  const voiceProfiles = STATE.realtime?.voice_profiles || [];
   const voiceProfileById = id => voiceProfiles.find(profile => profile.id === id);
-  let selectedVoiceProfile = localStorage.getItem("ling-gemini-voice-profile")
-    || STATE.realtime?.default_gemini_voice_profile || voiceProfiles[0]?.id || "cloudlet";
+  let selectedVoiceProfile = localStorage.getItem("ling-child-voice-profile")
+    || STATE.realtime?.default_voice_profile || voiceProfiles[0]?.id || "sunny";
   if (!voiceProfileById(selectedVoiceProfile)) {
-    selectedVoiceProfile = STATE.realtime?.default_gemini_voice_profile || voiceProfiles[0]?.id || "cloudlet";
+    selectedVoiceProfile = STATE.realtime?.default_voice_profile || voiceProfiles[0]?.id || "sunny";
   }
   const selectedVoice = () => voiceProfileById(selectedVoiceProfile) || voiceProfiles[0] || {};
   let videoRequested = false;
@@ -192,7 +192,7 @@ VIEWS.chat = async () => {
       ${FOX(90)}
       <h2 style="margin-top:14px">玩偶还没醒</h2>
       <p style="color:var(--ink-2);max-width:440px;margin:8px auto 0">
-        请配置 Gemini、StepFun、MiniCPM-o，或火山引擎 RTC，刷新页面后即可通话。</p>
+        请配置 Gemini、StepFun、MiniCPM-o，或 Gemini 童声 RTC，刷新页面后即可通话。</p>
     </div>`;
     return;
   }
@@ -210,9 +210,9 @@ VIEWS.chat = async () => {
         </div>
         <div class="actions">
           <div class="model-switch" role="group" aria-label="实时语音模型">
-            ${["gemini", "stepfun", "minicpm", "volcengine"].map(name => `<button type="button" data-provider="${name}"
+            ${["volcengine", "gemini", "stepfun", "minicpm"].map(name => `<button type="button" data-provider="${name}"
               ${providers[name]?.available ? "" : "disabled"}
-              title="${providers[name]?.available ? esc(providers[name].model) : `${providerLabel(name)} 未配置后端连接`}">
+              title="${providers[name]?.available ? providerLabel(name) : `${providerLabel(name)} 未配置后端连接`}">
               ${providerButtonLabel(name)}</button>`).join("")}
           </div>
           <button id="video-btn" class="video-toggle" type="button" aria-pressed="false" title="开启摄像头">📹</button>
@@ -225,10 +225,10 @@ VIEWS.chat = async () => {
     <div class="chat-side">
       ${voiceProfiles.length ? `<div class="side-card voice-picker" id="voice-panel">
         <h3>声音</h3>
-        <div class="voice-options" role="radiogroup" aria-label="Gemini 声音">
+        <div class="voice-options" role="radiogroup" aria-label="儿童声音">
           ${voiceProfiles.map((profile, index) => `<div class="voice-option" data-voice-option="${esc(profile.id)}">
             <label>
-              <input type="radio" name="gemini-voice-profile" value="${esc(profile.id)}"
+              <input type="radio" name="child-voice-profile" value="${esc(profile.id)}"
                 ${profile.id === selectedVoiceProfile ? "checked" : ""}>
               <span class="voice-swatch tone-${index + 1}" aria-hidden="true"></span>
               <span class="voice-copy"><b>${esc(profile.name)}</b><small>${esc(profile.description)}</small></span>
@@ -314,7 +314,7 @@ VIEWS.chat = async () => {
   function renderVoicePicker() {
     const panel = $("#voice-panel");
     if (!panel) return;
-    panel.hidden = selectedProvider !== "gemini";
+    panel.hidden = selectedProvider !== "volcengine";
     document.querySelectorAll("[data-voice-option]").forEach(option => {
       const input = $("input", option);
       const selected = input.value === selectedVoiceProfile;
@@ -326,11 +326,11 @@ VIEWS.chat = async () => {
     });
   }
 
-  document.querySelectorAll('input[name="gemini-voice-profile"]').forEach(input => {
+  document.querySelectorAll('input[name="child-voice-profile"]').forEach(input => {
     input.onchange = () => {
       if (RT.on || !voiceProfileById(input.value)) return;
       selectedVoiceProfile = input.value;
-      localStorage.setItem("ling-gemini-voice-profile", selectedVoiceProfile);
+      localStorage.setItem("ling-child-voice-profile", selectedVoiceProfile);
       renderVoicePicker();
     };
   });
@@ -530,7 +530,7 @@ VIEWS.chat = async () => {
         RT.videoEl = mount;
         RT.videoActive = true;
         syncVideoButton();
-        setRtStatus("视频已开启，火山引擎正在看和听…");
+        setRtStatus(`视频已开启，${providerLabel(selectedProvider)} 正在看和听…`);
         return true;
       } catch (error) {
         mount.remove();
@@ -578,7 +578,6 @@ VIEWS.chat = async () => {
       provider: selectedProvider,
     });
     if (selectedProvider === "minicpm") query.set("video", videoMode ? "1" : "0");
-    if (selectedProvider === "gemini") query.set("voice_profile", selectedVoiceProfile);
     const ws = new WebSocket(`${proto}${location.host}/api/realtime/ws?${query}`);
     RT.ws = ws;
     ws.onmessage = (e) => { let ev; try { ev = JSON.parse(e.data); } catch { return; } rtHandleEvent(ev); };
@@ -762,10 +761,10 @@ VIEWS.chat = async () => {
     $("#rt-bar")?.remove();
     const bar = document.createElement("div");
     bar.className = "call-bar"; bar.id = "rt-bar";
-    const voice = selectedProvider === "gemini" ? ` · ${esc(selectedVoice().name || "")}` : "";
+    const voice = selectedProvider === "volcengine" ? ` · ${esc(selectedVoice().name || "")}` : "";
     bar.innerHTML = `${FOX(46)}
       <div class="call-status"><span class="call-dot"></span><b id="rt-status">正在接通…</b>
-        <span class="hint">${providerLabel(selectedProvider)}${voice} · ${esc(selectedConfig().model || "")} · 直接说话，开口即可打断。戴耳机效果最好。</span></div>`;
+        <span class="hint">${providerLabel(selectedProvider)}${voice} · 已连接</span></div>`;
     log.parentNode.insertBefore(bar, log);
   }
 
@@ -827,7 +826,10 @@ VIEWS.chat = async () => {
     }
     if (!await ensureChatSession()) return false;
     try {
-      const info = await api.post("/volcengine/prepare", { session_id: CHAT.sessionId });
+      const info = await api.post("/volcengine/prepare", {
+        session_id: CHAT.sessionId,
+        voice_profile: selectedVoiceProfile,
+      });
       const rtc = window.VERTC.createEngine(info.app_id);
       RT.rtcEngine = rtc;
       RT.rtcInfo = info;
@@ -845,7 +847,10 @@ VIEWS.chat = async () => {
       });
       rtc.on(window.VERTC.events.onTokenWillExpire, async () => {
         try {
-          const renewed = await api.post("/volcengine/prepare", { session_id: CHAT.sessionId });
+          const renewed = await api.post("/volcengine/prepare", {
+            session_id: CHAT.sessionId,
+            voice_profile: selectedVoiceProfile,
+          });
           await rtc.updateToken(renewed.token);
         } catch (error) { console.warn("[volcengine] Token 更新失败", error); }
       });
@@ -1265,7 +1270,7 @@ VIEWS.demo = async () => {
   <h1 class="page-title">演示控制台</h1>
   <p class="page-sub">冷路径任务手动触发（正式版是定时任务）。
     交互内核：${STATE.realtime?.available ? "📞 Gemini / StepFun / 火山 RTC" : "😴 实时模型未配置"}
-    · 记忆工人：${esc(STATE.llm.worker_model)}</p>
+    · 记忆工人：${STATE.llm.worker_available ? "已就绪" : "本地规则"}</p>
   <div class="card">
     <h2>🌙 冷路径任务</h2>
     <div class="demo-btns">

@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from backend import db, engine, experience, llm, media, realtime
+from backend import db, engine, experience, llm, media, realtime, voice_profiles
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,10 +99,8 @@ def test_manifest_media_urls_exist_without_network(client: TestClient) -> None:
         assert response.headers["content-type"].startswith(("video/", "image/"))
 
 
-def test_gemini_voice_preview_assets_are_served_as_pcm_wav(client: TestClient) -> None:
-    for profile in realtime.gemini_voice_profiles():
-        if not profile["preview_url"]:
-            continue
+def test_child_voice_preview_assets_are_served_as_pcm_wav(client: TestClient) -> None:
+    for profile in voice_profiles.public_voice_profiles():
         response = client.get(profile["preview_url"])
         assert response.status_code == 200, profile["id"]
         assert response.headers["content-type"].startswith("audio/")
@@ -111,19 +109,39 @@ def test_gemini_voice_preview_assets_are_served_as_pcm_wav(client: TestClient) -
         assert len(response.content) > 100_000
 
 
-def test_gemini_voice_preview_manifest_matches_bundled_wav_files() -> None:
+def test_child_voice_preview_manifest_matches_bundled_wav_files() -> None:
     voice_root = FRONTEND_ROOT / "assets" / "voices"
     manifest = json.loads((voice_root / "manifest.json").read_text(encoding="utf-8"))
 
-    assert manifest["model"] == "gemini-3.1-flash-live-preview"
+    def keys(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                yield key.lower()
+                yield from keys(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from keys(child)
+
+    forbidden = {
+        "api_key",
+        "model",
+        "resource_id",
+        "secret_key",
+        "style_instruction",
+        "tts_model",
+        "voice",
+    }
+    assert manifest["pipeline"] == "production-rtc-recording"
+    assert forbidden.isdisjoint(keys(manifest))
     assert manifest["sample_rate"] == 24000
-    assert [item["id"] for item in manifest["profiles"]] == [
-        "cloudlet",
-        "starlight",
-        "moonlamp",
-        "honeydrop",
-    ]
+    assert [item["id"] for item in manifest["profiles"]] == ["sunny", "sprout"]
     for item in manifest["profiles"]:
+        assert "voice" not in item
+        assert "model" not in item
+        assert "resource_id" not in item
+        assert item["review"]["verdict"] == "pass"
+        assert item["review"]["child_likeness"] >= 7
+        assert item["review"]["adult_imitation_risk"] <= 3
         path = voice_root / item["file"]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
         with wave.open(str(path), "rb") as audio:
@@ -160,6 +178,19 @@ def test_parent_projection_guard_has_all_forbidden_internal_fields() -> None:
         "delete_url",
     ):
         assert json.dumps(forbidden) in model_source
+
+
+def test_state_does_not_publish_upstream_model_or_voice_configuration(
+    client: TestClient,
+) -> None:
+    state = client.get("/api/state").json()
+
+    assert state["llm"] == {"worker_available": False}
+    assert "model" not in state["realtime"]
+    assert "voice" not in state["realtime"]
+    for provider in state["realtime"]["providers"].values():
+        assert "model" not in provider
+        assert "voice" not in provider
 
 
 def test_api_responses_are_private_and_never_cached(client: TestClient) -> None:
@@ -265,13 +296,14 @@ def test_legacy_console_supports_preselected_video_and_minicpm_mode_switching() 
     assert 'speechStarted && RT.provider === "minicpm"' in source
 
 
-def test_legacy_console_selects_and_previews_gemini_voice_profiles() -> None:
+def test_legacy_console_selects_and_previews_child_voice_profiles() -> None:
     source = (FRONTEND_ROOT / "assets" / "app.js").read_text(encoding="utf-8")
 
-    assert 'localStorage.getItem("ling-gemini-voice-profile")' in source
-    assert 'query.set("voice_profile", selectedVoiceProfile)' in source
+    assert 'localStorage.getItem("ling-child-voice-profile")' in source
+    assert 'voice_profile: selectedVoiceProfile' in source
     assert "new Audio(profile.preview_url)" in source
-    assert 'input[name="gemini-voice-profile"]' in source
+    assert 'input[name="child-voice-profile"]' in source
+    assert 'panel.hidden = selectedProvider !== "volcengine"' in source
 
 
 def test_remote_realtime_websocket_requires_debug_access(
@@ -304,7 +336,6 @@ def test_remote_realtime_websocket_accepts_configured_token(
         session_id: str,
         provider: str | None,
         video: bool = False,
-        voice_profile: str | None = None,
     ) -> None:
         await ws.accept()
         await ws.send_json(
@@ -312,7 +343,6 @@ def test_remote_realtime_websocket_accepts_configured_token(
                 "session_id": session_id,
                 "provider": provider,
                 "video": video,
-                "voice_profile": voice_profile,
             }
         )
         await ws.close()
@@ -327,13 +357,11 @@ def test_remote_realtime_websocket_accepts_configured_token(
     ) as remote:
         with remote.websocket_connect(
             "/api/realtime/ws?session_id=private&provider=gemini&video=1"
-            "&voice_profile=moonlamp"
         ) as socket:
             assert socket.receive_json() == {
                 "session_id": "private",
                 "provider": "gemini",
                 "video": True,
-                "voice_profile": "moonlamp",
             }
 
 
@@ -349,7 +377,6 @@ def test_hackathon_mode_allows_public_realtime_websocket_without_token(
         session_id: str,
         provider: str | None,
         video: bool = False,
-        voice_profile: str | None = None,
     ) -> None:
         await ws.accept()
         await ws.send_json({"session_id": session_id, "provider": provider})
