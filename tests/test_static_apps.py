@@ -32,6 +32,7 @@ def client(isolated_db: Path, monkeypatch: pytest.MonkeyPatch):
 
     with TestClient(
         app,
+        base_url="http://127.0.0.1:8888",
         follow_redirects=False,
         client=("127.0.0.1", 50000),
     ) as test_client:
@@ -171,6 +172,25 @@ def test_remote_debug_api_accepts_configured_bearer_token(
         headers={"Authorization": "Bearer demo-test-token"},
     ) as remote:
         assert remote.get("/api/facts").status_code == 200
+
+
+def test_loopback_reverse_proxy_is_not_treated_as_a_local_request(
+    isolated_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LING_ADMIN_TOKEN", raising=False)
+    from backend.app import app
+
+    with TestClient(
+        app,
+        base_url="https://mm.liaoxingyi.com",
+        client=("127.0.0.1", 50000),
+        headers={"X-Forwarded-For": "203.0.113.10"},
+    ) as proxied:
+        response = proxied.get("/api/facts")
+
+    assert response.status_code == 403
+    assert response.headers["cache-control"] == "private, no-store"
 
 
 def test_legacy_per_fact_delete_is_not_routed(client: TestClient) -> None:

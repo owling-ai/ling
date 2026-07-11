@@ -50,9 +50,8 @@ _PROTECTED_API_PATHS = {
 _PROTECTED_API_PREFIXES = ("/api/admin/", "/api/facts/")
 
 
-def _is_local_request(request: Request) -> bool:
-    host = request.client.host if request.client else ""
-    if host in {"localhost", "testclient"}:
+def _is_loopback_host(host: str) -> bool:
+    if host == "localhost":
         return True
     try:
         address = ipaddress.ip_address(host)
@@ -60,6 +59,19 @@ def _is_local_request(request: Request) -> bool:
         return False
     mapped = getattr(address, "ipv4_mapped", None)
     return address.is_loopback or bool(mapped and mapped.is_loopback)
+
+
+def _is_local_request(request: Request) -> bool:
+    client_host = request.client.host if request.client else ""
+    if client_host == "testclient":
+        return True
+    if any(
+        request.headers.get(header)
+        for header in ("forwarded", "x-forwarded-for", "x-real-ip")
+    ):
+        return False
+    destination_host = request.url.hostname or ""
+    return _is_loopback_host(client_host) and _is_loopback_host(destination_host)
 
 
 def _has_debug_access(request: Request) -> bool:
