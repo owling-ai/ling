@@ -393,6 +393,10 @@ async def realtime_ws(
 
 class VolcSessionBody(BaseModel):
     session_id: str
+
+
+class VolcPrepareBody(VolcSessionBody):
+    # Web 调试台可试听切换；硬件客户端省略后固定使用服务端默认童声。
     voice_profile: str | None = None
 
 
@@ -436,7 +440,7 @@ def volcengine_gemini_callback(request: Request, body: dict):
 
 
 @app.post("/api/volcengine/prepare")
-def volcengine_prepare(body: VolcSessionBody):
+def volcengine_prepare(body: VolcPrepareBody):
     """Issue a short-lived ByteRTC token after the user clicks Connect."""
     try:
         return volcengine_rtc.prepare(body.session_id, body.voice_profile)

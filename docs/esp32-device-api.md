@@ -23,7 +23,7 @@ POST /api/session/end
 - Gemini：16 kHz PCM16 上行、24 kHz PCM16 下行、可发 JPEG。
 - StepFun：24 kHz PCM16 双向、无视频。
 - MiniCPM：设备仍按 16 kHz PCM16 上行，后端负责协议和格式转换；当前无用户 ASR。
-- Gemini 童声和火山 Ark 方案依赖 ByteRTC；裸 ESP32 不能复用 Web SDK，需要 RTC 原生 SDK 或 Device Gateway。
+- Gemini 童声和火山 Ark 方案依赖 ByteRTC；支持 ByteRTC 的硬件调用 `prepare` 时省略 `voice_profile` 即默认使用“小晴天”。裸 ESP32 不能复用 Web SDK，仍需要 RTC 原生 SDK 或 Device Gateway。
 - 固定 `CHILD_ID=1`，没有设备鉴权或绑定。
 - `/api/session/end` 同步运行冷路径，可能耗时。
 - 业务 session、转写和 Gemini resumption handle 已持久化；设备复用同一 `session_id` 重连时，后端优先恢复 Gemini 会话，token 失效则回放已完成的文本历史。实时 WebSocket 本身仍需重新建立。

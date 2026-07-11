@@ -304,6 +304,7 @@ def test_legacy_console_selects_and_previews_child_voice_profiles() -> None:
     assert "new Audio(profile.preview_url)" in source
     assert 'input[name="child-voice-profile"]' in source
     assert 'panel.hidden = selectedProvider !== "volcengine"' in source
+    assert '.filter(name => providers[name])' in source
 
 
 def test_remote_realtime_websocket_requires_debug_access(

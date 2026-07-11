@@ -132,8 +132,8 @@ PROVIDER_INFO = {
         "supports_video": True,
         "transport": "bytedrtc",
         "llm_provider": "gemini" if VOLC_USES_GEMINI else "ark",
-        "label": "Gemini 童声" if VOLC_USES_GEMINI else "火山 RTC",
-        "short_label": "童声" if VOLC_USES_GEMINI else "火山 RTC",
+        "label": "Gemini" if VOLC_USES_GEMINI else "火山 RTC",
+        "short_label": "Gemini" if VOLC_USES_GEMINI else "火山 RTC",
     },
     "minicpm": {
         "model": MINICPM_MODEL,
@@ -195,11 +195,17 @@ def provider_available(provider: str) -> bool:
     return False
 
 
+def hybrid_gemini_available() -> bool:
+    return VOLC_USES_GEMINI and provider_available("volcengine")
+
+
 def default_provider() -> str:
     configured = os.environ.get("LING_REALTIME_PROVIDER", "").lower()
+    if configured == "gemini" and hybrid_gemini_available():
+        return "volcengine"
     if configured in PROVIDER_INFO and provider_available(configured):
         return configured
-    if VOLC_USES_GEMINI and provider_available("volcengine"):
+    if hybrid_gemini_available():
         return "volcengine"
     if provider_available("gemini"):
         return "gemini"
@@ -231,6 +237,11 @@ def info() -> dict:
         }
         for name, config in PROVIDER_INFO.items()
     }
+    if hybrid_gemini_available():
+        providers.pop("gemini", None)
+        providers["volcengine"].update(
+            {"label": "Gemini", "short_label": "Gemini", "llm_provider": "gemini"}
+        )
     selected = default_provider()
     current = providers[selected]
     return {

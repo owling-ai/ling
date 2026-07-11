@@ -67,7 +67,7 @@ Gemini Live 的实验 `replicatedVoiceConfig` 也没有作为替代：
 
 该约束通过 `VolcanoTTSParameters.req_params.context_texts` 随 RTC 任务持续生效，不修改音高，也不做播放端后处理。
 
-默认 profile 为 `sunny`。环境变量 `LING_VOLC_VOICE_PROFILE` 只接受 `sunny` 或 `sprout`；未传、非法或已经删除的 ID 都回退到 `sunny`。profile 在 `/api/volcengine/prepare` 时绑定，通话中不能切换。
+默认 profile 为 `sunny`。环境变量 `LING_VOLC_VOICE_PROFILE` 只接受 `sunny` 或 `sprout`；RTC 或硬件客户端只传 `session_id` 即可直接获得默认童声。网页调试台可以提交公开 profile ID 进行两档验收；未传、非法或已经删除的 ID 都回退到 `sunny`。profile 在 `/api/volcengine/prepare` 时绑定，通话中不能切换。
 
 ## 5. 评审方法
 

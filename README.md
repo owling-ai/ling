@@ -66,7 +66,7 @@ LING_MINICPM_BASE_URL=http://192.168.1.9:9000/v1
 
 `LING_VOLC_GEMINI_LLM_URL` 必须是公网可访问的 HTTPS 地址，并指向当前服务的固定回调路径。回调使用每次进程启动时生成的独立 Bearer Token，Gemini API Key 不会发给火山引擎。配好该 URL 后默认选择 `volcengine` 传输，但 LLM 仍是 Gemini；未配置时可继续使用 Gemini Live 原声或火山 Ark。
 
-旧调试台提供“小晴天 / 小青芽”两档可试听童声。两档均来自火山官方公版 `seed-tts-2.0` 白名单，不使用真人儿童录音、声音复制或 DSP 升调。完整验证和边界见 [定制音色方案](./docs/custom-voice.md)。
+旧调试台只显示一个“Gemini”入口，并在其中提供“小晴天 / 小青芽”两档可试听童声；RTC 客户端不传音色时由后端直接使用默认“小晴天”。两档均来自火山官方公版 `seed-tts-2.0` 白名单，不使用真人儿童录音、声音复制或 DSP 升调。完整验证和边界见 [定制音色方案](./docs/custom-voice.md)。
 
 ## 冷路径与媒体
 

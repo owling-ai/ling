@@ -165,10 +165,10 @@ VIEWS.chat = async () => {
   const doll = STATE.doll;
   const providers = STATE.realtime?.providers || {};
   const providerLabel = name => providers[name]?.label || ({
-    gemini: "Gemini 原声", stepfun: "StepFun", minicpm: "MiniCPM-o 4.5", volcengine: "火山 RTC",
+    gemini: "Gemini", stepfun: "StepFun", minicpm: "MiniCPM-o 4.5", volcengine: "Gemini",
   })[name] || name;
   const providerButtonLabel = name => providers[name]?.short_label || ({
-    gemini: "Gemini", stepfun: "StepFun", minicpm: "MiniCPM", volcengine: "火山 RTC",
+    gemini: "Gemini", stepfun: "StepFun", minicpm: "MiniCPM", volcengine: "Gemini",
   })[name] || name;
   let selectedProvider = localStorage.getItem("ling-realtime-provider") || STATE.realtime?.default_provider || "gemini";
   if (!providers[selectedProvider]?.available) {
@@ -183,6 +183,8 @@ VIEWS.chat = async () => {
     selectedVoiceProfile = STATE.realtime?.default_voice_profile || voiceProfiles[0]?.id || "sunny";
   }
   const selectedVoice = () => voiceProfileById(selectedVoiceProfile) || voiceProfiles[0] || {};
+  const providerOrder = ["volcengine", "gemini", "stepfun", "minicpm"]
+    .filter(name => providers[name]);
   let videoRequested = false;
 
   if (!STATE.realtime?.available) {
@@ -192,7 +194,7 @@ VIEWS.chat = async () => {
       ${FOX(90)}
       <h2 style="margin-top:14px">玩偶还没醒</h2>
       <p style="color:var(--ink-2);max-width:440px;margin:8px auto 0">
-        请配置 Gemini、StepFun、MiniCPM-o，或 Gemini 童声 RTC，刷新页面后即可通话。</p>
+        请配置 Gemini、StepFun 或 MiniCPM-o，刷新页面后即可通话。</p>
     </div>`;
     return;
   }
@@ -210,7 +212,7 @@ VIEWS.chat = async () => {
         </div>
         <div class="actions">
           <div class="model-switch" role="group" aria-label="实时语音模型">
-            ${["volcengine", "gemini", "stepfun", "minicpm"].map(name => `<button type="button" data-provider="${name}"
+            ${providerOrder.map(name => `<button type="button" data-provider="${name}"
               ${providers[name]?.available ? "" : "disabled"}
               title="${providers[name]?.available ? providerLabel(name) : `${providerLabel(name)} 未配置后端连接`}">
               ${providerButtonLabel(name)}</button>`).join("")}
@@ -266,7 +268,7 @@ VIEWS.chat = async () => {
     return $(".bubble", div);   // 转写增量要往里追加
   };
 
-  // 四个上游共用记忆 session；火山使用 ByteRTC，其余使用内部 WebSocket 协议。
+  // 所有上游共用记忆 session；Gemini 童声使用 ByteRTC，其余使用内部 WebSocket 协议。
   const RT = { on: false, provider: null, ws: null, ctx: null, stream: null, node: null, src: null,
                playHead: 0, sources: [], buf: [], bufLen: 0, bubble: null, text: "", active: null,
                userBubble: null, videoStream: null, videoActive: false, videoEl: null,

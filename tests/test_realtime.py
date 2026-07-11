@@ -266,7 +266,7 @@ def test_bridge_reports_stepfun_quota_instead_of_exception_name(
 def test_gemini_child_rtc_is_the_default_when_hybrid_callback_is_ready(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("LING_REALTIME_PROVIDER", raising=False)
+    monkeypatch.setenv("LING_REALTIME_PROVIDER", "gemini")
     monkeypatch.setattr(realtime, "VOLC_USES_GEMINI", True)
     monkeypatch.setattr(realtime, "provider_available", lambda name: name != "minicpm")
 
@@ -301,9 +301,15 @@ def test_native_gemini_setup_uses_only_legacy_prebuilt_voice() -> None:
     assert "固定声音角色" not in instruction
 
 
-def test_realtime_info_publishes_default_child_profile_without_upstream_ids() -> None:
+def test_realtime_info_publishes_one_gemini_entry_without_upstream_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(realtime, "hybrid_gemini_available", lambda: True)
     info = realtime.info()
 
+    assert "gemini" not in info["providers"]
+    assert info["providers"]["volcengine"]["label"] == "Gemini"
+    assert info["providers"]["volcengine"]["short_label"] == "Gemini"
     assert "model" not in info
     assert "voice" not in info
     assert all("model" not in provider for provider in info["providers"].values())

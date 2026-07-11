@@ -25,10 +25,13 @@ def test_prepare_binds_allowlisted_profile_and_falls_back(
         volcengine_rtc, "create_rtc_token", lambda _room_id, _user_id: "rtc-token"
     )
 
+    defaulted = volcengine_rtc.prepare("hardware-default")
     selected = volcengine_rtc.prepare("selected", "sprout")
     locked = volcengine_rtc.prepare("selected", "sunny")
     fallback = volcengine_rtc.prepare("fallback", "not-allowlisted")
 
+    assert defaulted["voice_profile"] == "sunny"
+    assert defaulted["voice_name"] == "小晴天"
     assert selected["voice_profile"] == "sprout"
     assert locked["voice_profile"] == "sprout"
     assert selected["voice_name"] == "小青芽"
@@ -157,7 +160,7 @@ def test_open_gemini_stream_retries_transient_connection_failure(
     assert requests[1].get_header("Authorization") == "Bearer private-google-key"
 
 
-def test_prepare_route_forwards_selected_profile(
+def test_prepare_route_defaults_hardware_and_allows_web_preview_selection(
     isolated_db,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -176,13 +179,18 @@ def test_prepare_route_forwards_selected_profile(
         base_url="http://127.0.0.1:8888",
         client=("127.0.0.1", 50000),
     ) as client:
-        response = client.post(
+        selected = client.post(
             "/api/volcengine/prepare",
             json={"session_id": "session", "voice_profile": "sprout"},
         )
+        defaulted = client.post(
+            "/api/volcengine/prepare",
+            json={"session_id": "hardware"},
+        )
 
-    assert response.status_code == 200
-    assert received == [("session", "sprout")]
+    assert selected.status_code == 200
+    assert defaulted.status_code == 200
+    assert received == [("session", "sprout"), ("hardware", None)]
 
 
 def test_gemini_callback_requires_its_ephemeral_token_and_streams_sse(
