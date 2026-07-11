@@ -67,6 +67,12 @@ PROVIDER_INFO = {
     },
 }
 
+PROVIDER_LABELS = {
+    "stepfun": "StepFun",
+    "gemini": "Gemini Live",
+    "volcengine": "火山 RTC",
+}
+
 STEPFUN_CLIENT_EVENTS = {
     "input_audio_buffer.append",
     "input_audio_buffer.commit",
@@ -221,6 +227,54 @@ async def _connect(url: str, headers: dict[str, str]):
 
 async def _send_json(client, obj: dict):
     await client.send_text(json.dumps(obj, ensure_ascii=False))
+
+
+def _provider_error_event(provider: str, exc: Exception) -> dict:
+    """Turn upstream connection failures into stable, actionable client errors."""
+    label = PROVIDER_LABELS.get(provider, provider)
+    response = getattr(exc, "response", None)
+    status = getattr(response, "status_code", None)
+
+    if status in (401, 403):
+        code = "provider_auth_failed"
+        message = f"{label} 鉴权失败，请检查 API Key 和模型权限"
+        retryable = False
+    elif status == 402:
+        code = "provider_quota_exceeded"
+        message = f"{label} API 额度不足，请检查套餐与账单"
+        retryable = False
+    elif status == 404:
+        code = "provider_not_found"
+        message = f"{label} 实时模型或接口不存在，请检查模型配置"
+        retryable = False
+    elif status == 429:
+        code = "provider_rate_limited"
+        message = f"{label} 请求过于频繁，请稍后再试"
+        retryable = True
+    elif isinstance(status, int) and status >= 500:
+        code = "provider_unavailable"
+        message = f"{label} 服务暂时不可用，请稍后再试"
+        retryable = True
+    elif isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        code = "provider_timeout"
+        message = f"连接 {label} 超时，请稍后再试"
+        retryable = True
+    elif isinstance(exc, OSError):
+        code = "provider_network_error"
+        message = f"无法连接 {label}，请检查网络与代理"
+        retryable = True
+    else:
+        code = "provider_connection_failed"
+        message = f"连不上 {label}，请稍后再试"
+        retryable = True
+
+    return {
+        "type": "ling.error",
+        "code": code,
+        "message": message,
+        "provider": provider,
+        "retryable": retryable,
+    }
 
 
 def _system_instruction(pack: dict) -> str:
@@ -721,12 +775,13 @@ async def bridge(client, session_id: str, provider: str | None = None):
         else:
             await _bridge_stepfun(client, session_id, session["pack"])
     except Exception as exc:
-        _log(f"连接 {provider} 失败：{type(exc).__name__}: {exc}")
+        error_event = _provider_error_event(provider, exc)
+        _log(
+            f"连接 {PROVIDER_LABELS.get(provider, provider)} 失败："
+            f"{type(exc).__name__}: {exc} · code={error_event['code']}"
+        )
         try:
-            await _send_json(
-                client,
-                {"type": "ling.error", "message": f"连不上 {provider}：{type(exc).__name__}"},
-            )
+            await _send_json(client, error_event)
             await client.close()
         except Exception:
             pass
