@@ -55,6 +55,11 @@ def test_child_and_parent_entrypoints_redirect_to_canonical_scope(client: TestCl
         assert_content_type(client.get(f"/{app_name}/"), "text/html")
 
 
+def test_retired_design_prototype_is_not_served(client: TestClient) -> None:
+    assert client.get("/design").status_code == 404
+    assert client.head("/design").status_code == 404
+
+
 def test_pwa_manifests_service_workers_and_icons_are_served(client: TestClient) -> None:
     for app_name in ("child", "parent"):
         manifest_response = client.get(f"/{app_name}/manifest.webmanifest")
@@ -139,6 +144,7 @@ def test_remote_debug_and_admin_apis_require_a_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("LING_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("LING_ALLOW_UNAUTHENTICATED", raising=False)
     from backend.app import app
 
     with TestClient(
@@ -167,6 +173,7 @@ def test_remote_debug_api_accepts_configured_bearer_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LING_ADMIN_TOKEN", "demo-test-token")
+    monkeypatch.delenv("LING_ALLOW_UNAUTHENTICATED", raising=False)
     from backend.app import app
 
     with TestClient(
@@ -184,6 +191,24 @@ def test_remote_debug_api_accepts_configured_bearer_token(
     assert "memory_pack" not in payload
 
 
+def test_hackathon_mode_allows_public_debug_api_without_token(
+    isolated_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LING_ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("LING_ALLOW_UNAUTHENTICATED", "1")
+    from backend.app import app
+
+    with TestClient(
+        app,
+        base_url="https://public-demo.example",
+        follow_redirects=False,
+        client=("203.0.113.10", 50000),
+    ) as public_client:
+        assert public_client.get("/api/state").status_code == 200
+        assert public_client.post("/api/session/start").status_code == 200
+
+
 def test_legacy_console_consumes_sanitized_session_start_shape() -> None:
     source = (FRONTEND_ROOT / "assets" / "app.js").read_text(encoding="utf-8")
 
@@ -196,6 +221,7 @@ def test_remote_realtime_websocket_requires_debug_access(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("LING_ADMIN_TOKEN", raising=False)
+    monkeypatch.delenv("LING_ALLOW_UNAUTHENTICATED", raising=False)
     from backend.app import app
 
     with TestClient(app, client=("203.0.113.10", 50000)) as remote:
@@ -213,6 +239,7 @@ def test_remote_realtime_websocket_accepts_configured_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LING_ADMIN_TOKEN", "demo-test-token")
+    monkeypatch.delenv("LING_ALLOW_UNAUTHENTICATED", raising=False)
 
     async def fake_bridge(ws, session_id: str, provider: str | None) -> None:
         await ws.accept()
@@ -228,6 +255,35 @@ def test_remote_realtime_websocket_accepts_configured_token(
         headers={"Authorization": "Bearer demo-test-token"},
     ) as remote:
         with remote.websocket_connect(
+            "/api/realtime/ws?session_id=private&provider=gemini"
+        ) as socket:
+            assert socket.receive_json() == {
+                "session_id": "private",
+                "provider": "gemini",
+            }
+
+
+def test_hackathon_mode_allows_public_realtime_websocket_without_token(
+    isolated_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LING_ADMIN_TOKEN", raising=False)
+    monkeypatch.setenv("LING_ALLOW_UNAUTHENTICATED", "1")
+
+    async def fake_bridge(ws, session_id: str, provider: str | None) -> None:
+        await ws.accept()
+        await ws.send_json({"session_id": session_id, "provider": provider})
+        await ws.close()
+
+    monkeypatch.setattr(realtime, "bridge", fake_bridge)
+    from backend.app import app
+
+    with TestClient(
+        app,
+        base_url="https://public-demo.example",
+        client=("203.0.113.10", 50000),
+    ) as public_client:
+        with public_client.websocket_connect(
             "/api/realtime/ws?session_id=private&provider=gemini"
         ) as socket:
             assert socket.receive_json() == {
@@ -284,7 +340,7 @@ def test_legacy_per_fact_delete_is_not_routed(client: TestClient) -> None:
     assert client.delete("/api/facts/1").status_code in {404, 405}
 
 
-def test_demo_runner_is_local_only_by_default() -> None:
+def test_demo_runner_opens_hackathon_network_by_default() -> None:
     runner = (ROOT / "run.sh").read_text(encoding="utf-8")
-    assert "--host 127.0.0.1" in runner
-    assert "--host 0.0.0.0" not in runner
+    assert 'host="${LING_HOST:-0.0.0.0}"' in runner
+    assert 'LING_ALLOW_UNAUTHENTICATED="${LING_ALLOW_UNAUTHENTICATED:-1}"' in runner

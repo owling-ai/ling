@@ -2,9 +2,11 @@ import { createParentApi } from "./api.mjs";
 import {
   PARENT_TABS,
   createTabStore,
+  displayableConversationSuggestion,
   guardianViewModel,
   growthViewModel,
   memoryViewModel,
+  mergeMemoryViewModels,
   rightsDialogModel,
   setTabError,
   setTabLoading,
@@ -12,7 +14,11 @@ import {
   todayViewModel,
 } from "./model.mjs";
 
+const WELCOME_KEY = "ling-parent-welcome-v1";
 const api = createParentApi();
+const appShell = document.querySelector("#app-shell");
+const welcomeView = document.querySelector("#welcome-view");
+const startButton = document.querySelector("#start-app");
 const tabButtons = new Map(
   [...document.querySelectorAll('[role="tab"][data-tab]')].map((button) => [button.dataset.tab, button]),
 );
@@ -24,6 +30,8 @@ const rightsDialog = document.querySelector("#rights-dialog");
 const rightsTitle = document.querySelector("#rights-title");
 const rightsBody = document.querySelector("#rights-body");
 const rightsNotice = document.querySelector("#rights-notice");
+const boundaryDialog = document.querySelector("#boundary-dialog");
+const boundaryList = document.querySelector("#boundary-list");
 
 const viewModels = {
   today: todayViewModel,
@@ -34,7 +42,10 @@ const viewModels = {
 
 let tabStore = createTabStore();
 let activeTab = "today";
-let rightsTrigger = null;
+let dialogTrigger = null;
+let latestRedLines = [];
+let memoryPageLoading = false;
+let memoryPageError = "";
 const controllers = new Map();
 
 function element(tag, { className = "", text = "", attributes = {} } = {}, children = []) {
@@ -57,86 +68,40 @@ function announce(message) {
   });
 }
 
-function viewHeader(title, subtitle, badge = "") {
-  const heading = element("div", { className: "view-header" });
-  const row = element("div", { className: "section-heading" }, [
+function pageHeader(title, subtitle = "") {
+  return element("header", { className: "page-header" }, [
     element("h2", { text: title }),
-    badge ? element("span", { className: "read-only-badge", text: badge }) : null,
+    subtitle ? element("p", { text: subtitle }) : null,
   ]);
-  heading.append(row);
-  if (subtitle) heading.append(element("p", { className: "view-subtitle", text: subtitle }));
-  return heading;
 }
 
-function metricGrid(metrics) {
-  return element("div", { className: "metric-grid", attributes: { "aria-label": "关键数字" } },
-    metrics.map((metric) => element("div", { className: "metric" }, [
-      element("strong", { text: metric.display }),
-      element("span", { text: metric.label }),
-    ])),
-  );
+function sectionHeading(title, icon, copy = "") {
+  return element("div", { className: "section-title" }, [
+    element("span", { className: `section-icon ${icon}`, attributes: { "aria-hidden": "true" } }),
+    element("div", {}, [
+      element("h3", { text: title }),
+      copy ? element("p", { text: copy }) : null,
+    ]),
+  ]);
 }
 
-function contentSection(title, children = [], className = "content-section") {
+function contentSection(title, children = [], className = "content-section", icon = "") {
   const section = element("section", { className });
-  if (title) section.append(element("h3", { text: title }));
+  if (title) section.append(sectionHeading(title, icon));
   section.append(...children.filter(Boolean));
   return section;
 }
 
-function emptyCard(title, copy) {
-  return element("section", { className: "empty-card" }, [
+function emptyState(title, copy) {
+  return element("section", { className: "empty-state" }, [
+    element("span", { className: "empty-light", attributes: { "aria-hidden": "true" } }),
     element("h3", { text: title }),
-    element("p", { className: "empty-copy", text: copy }),
-  ]);
-}
-
-function infoBand(label, copy) {
-  return element("section", { className: "info-band" }, [
-    element("strong", { text: label }),
     element("p", { text: copy }),
   ]);
 }
 
-function moodSection(mood) {
-  return contentSection("心情速览", [
-    element("div", { className: "section-heading" }, [
-      element("span", { className: "disclaimer", text: mood.disclaimer }),
-    ]),
-    element("p", {
-      className: mood.summary ? "" : "empty-copy",
-      text: mood.summary || "今天还没有足够信息形成心情速览。",
-    }),
-  ]);
-}
-
-function renderLoading(panel, tab) {
-  const stack = element("div", { className: "skeleton-stack", attributes: { "aria-hidden": "true" } }, [
-    element("div", { className: "skeleton" }),
-    element("div", { className: "skeleton" }),
-    element("div", { className: "skeleton" }),
-  ]);
-  panel.replaceChildren(
-    element("p", { className: "sr-only", text: `${tabButtons.get(tab).textContent}正在加载` }),
-    stack,
-  );
-}
-
-function renderError(panel, tab, message) {
-  const retry = element("button", {
-    className: "secondary-button",
-    text: "重试",
-    attributes: { type: "button", "data-retry": tab },
-  });
-  panel.replaceChildren(element("section", { className: "state-card", attributes: { role: "alert" } }, [
-    element("h2", { text: "暂时没有加载出来" }),
-    element("p", { className: "state-copy", text: message || "请稍后再试。" }),
-    retry,
-  ]));
-}
-
 function formatDateLabel(value) {
-  if (!value) return "";
+  if (!value) return "今天";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return new Intl.DateTimeFormat("zh-CN", {
@@ -158,202 +123,296 @@ function formatMomentTime(value) {
   }).format(parsed);
 }
 
-function renderToday(panel, model) {
-  const hasMetric = model.metrics.some((metric) => !metric.display.startsWith("-"));
-  const hasNarrative = model.mood.summary || model.attention || model.tonight;
-  const content = [
-    viewHeader(`${model.childName}和${model.dollName}，今天`, formatDateLabel(model.date)),
-  ];
-
-  if (!hasMetric && !hasNarrative) {
-    content.push(emptyCard("今天还很安静", "完成一次陪伴后，这里会出现可行动的今日速览。"));
-  } else {
-    content.push(metricGrid(model.metrics));
-  }
-
-  content.push(moodSection(model.mood));
-
-  if (model.attention) {
-    const attentionChildren = [element("p", { text: model.attention.summary })];
-    if (model.attention.conversationPrompt) {
-      attentionChildren.push(element("p", {
-        className: "attention-prompt",
-        text: `今晚可以问问：${model.attention.conversationPrompt}`,
-      }));
-    }
-    content.push(contentSection("值得留意", attentionChildren, "attention-section"));
-  }
-
-  if (model.tonight) content.push(infoBand("今晚一起", model.tonight.summary));
-  panel.replaceChildren(...content);
+function renderLoading(panel, tab) {
+  panel.replaceChildren(
+    pageHeader(tabButtons.get(tab).textContent),
+    element("p", { className: "sr-only", text: `${tabButtons.get(tab).textContent}正在加载` }),
+    element("div", { className: "skeleton-stack", attributes: { "aria-hidden": "true" } }, [
+      element("div", { className: "skeleton skeleton-hero" }),
+      element("div", { className: "skeleton" }),
+      element("div", { className: "skeleton" }),
+    ]),
+  );
 }
 
-function renderWords(words) {
-  const list = element("ul", { className: "word-list", attributes: { "aria-label": "英语掌握层级" } });
-  for (const word of words) {
-    list.append(element("li", { className: "word-row" }, [
-      element("div", {}, [
-        element("b", { text: word.text }),
-        word.meaning ? element("span", { className: "secondary", text: word.meaning }) : null,
-      ]),
-      element("span", { className: `level-badge ${word.level}`, text: word.levelLabel }),
-    ]));
-  }
-  return list;
+function renderError(panel, tab, message) {
+  panel.replaceChildren(
+    pageHeader(tabButtons.get(tab).textContent),
+    element("section", { className: "state-card", attributes: { role: "alert" } }, [
+      element("span", { className: "state-light", attributes: { "aria-hidden": "true" } }),
+      element("h3", { text: "暂时没有加载出来" }),
+      element("p", { text: message || "请稍后再试。" }),
+      element("button", {
+        className: "secondary-button",
+        text: "重新加载",
+        attributes: { type: "button", "data-retry": tab },
+      }),
+    ]),
+  );
+}
+
+function todayScene() {
+  return element("div", { className: "today-scene", attributes: { "aria-hidden": "true" } }, [
+    element("span", { className: "scene-cloud cloud-left" }),
+    element("span", { className: "scene-cloud cloud-right" }),
+    element("span", { className: "scene-hill hill-back" }),
+    element("span", { className: "scene-hill hill-front" }),
+    element("span", { className: "scene-kite" }),
+    element("span", { className: "kite-tail" }),
+  ]);
+}
+
+function safeConversationSuggestion(model) {
+  return displayableConversationSuggestion(model);
+}
+
+function renderToday(panel, model) {
+  const hasActivity = model.hasActivity === true;
+  const calm = !model.attention;
+  const childName = model.childName === "孩子" ? "她" : model.childName;
+  const suggestion = safeConversationSuggestion(model);
+  const summary = hasActivity
+    ? `${childName}和${model.dollName}今天有了新的共同经历。`
+    : "今天还没有新的共同经历。";
+
+  panel.replaceChildren(
+    pageHeader("今日", formatDateLabel(model.date)),
+    todayScene(),
+    element("section", { className: `today-conclusion${calm ? " calm" : " attention"}` }, [
+      element("span", { className: "conclusion-mark", attributes: { "aria-hidden": "true" } }),
+      element("h3", { text: calm ? (hasActivity ? "今天很安稳" : "今天还很安静") : "有一件事值得留意" }),
+      element("p", { text: model.attention?.summary || summary }),
+    ]),
+    contentSection("今晚可以聊什么", [
+      suggestion
+        ? element("div", { className: "conversation-card" }, [
+            element("span", { className: "conversation-blocks", attributes: { "aria-hidden": "true" } }),
+            element("p", { text: suggestion }),
+          ])
+        : element("div", { className: "conversation-empty" }, [
+            element("p", { text: "今天没有新的建议" }),
+          ]),
+      element("p", {
+        className: "today-meta",
+        text: hasActivity ? "今天有新的共同经历" : "今天没有待处理事项",
+      }),
+    ], "conversation-section", "talk"),
+  );
+}
+
+function firstGrowthStory(model) {
+  return model.growthMoments.find((story) => story.before && story.after) || null;
+}
+
+function wordGrowthCopy(model) {
+  const word = model.words.find((item) => item.text.toLowerCase() === "kite")
+    || model.words.find((item) => item.level === "produced")
+    || model.words[0];
+  if (!word) return "新的生活词会在自然相处里慢慢出现，不需要额外测试。";
+  if (word.level === "produced") return `从听懂 ${word.text}，到相处时自然说出来`;
+  if (word.level === "recognized") return `从第一次听到 ${word.text}，到现在已经能听懂`;
+  return `最近在生活里第一次遇见 ${word.text}`;
 }
 
 function renderGrowth(panel, model) {
-  const content = [
-    viewHeader("英语成长", model.periodLabel),
-    metricGrid(model.metrics),
-  ];
-  const hasDetails = model.words.length || model.growthMoments.length || model.nextReview || model.retreat;
-
-  if (!hasDetails) {
-    content.push(emptyCard("还没有新的成长记录", "灵灵会在自然对话后更新这里，不需要额外测试孩子。"));
-  }
-
-  if (model.words.length) content.push(contentSection("本周接触的词", [renderWords(model.words)]));
-
-  if (model.growthMoments.length) {
-    const list = element("ul", { className: "transition-list", attributes: { "aria-label": "成长变化文字摘要" } });
-    for (const moment of model.growthMoments) {
-      list.append(element("li", {}, [
-        moment.before ? element("div", { className: "transition-before", text: `以前：${moment.before}` }) : null,
-        moment.after ? element("div", { className: "transition-after", text: `现在：${moment.after}` }) : null,
-      ]));
-    }
-    content.push(contentSection("成长时刻", [list]));
-  }
-
-  if (model.nextReview) content.push(infoBand("下次自然出现", model.nextReview));
-
-  if (model.retreat) {
-    content.push(contentSection("撤退记录", [
-      model.retreat.dateLabel ? element("p", { className: "secondary", text: model.retreat.dateLabel }) : null,
-      element("p", { text: model.retreat.summary }),
-      element("p", { className: "attention-prompt", text: model.retreat.explanation }),
-    ]));
-  }
-  panel.replaceChildren(...content);
+  const story = firstGrowthStory(model);
+  panel.replaceChildren(
+    pageHeader("成长", model.periodLabel),
+    contentSection("最近的变化", [
+      story
+        ? element("article", { className: "growth-story" }, [
+            element("div", { className: "growth-row before" }, [
+              element("span", { className: "growth-object lamp-object", attributes: { "aria-hidden": "true" } }),
+              element("div", {}, [
+                element("b", { text: "以前" }),
+                element("p", { text: story.before }),
+              ]),
+            ]),
+            element("div", { className: "story-divider", attributes: { "aria-hidden": "true" } }),
+            element("div", { className: "growth-row now" }, [
+              element("span", { className: "growth-object dinosaur-object", attributes: { "aria-hidden": "true" } }),
+              element("div", {}, [
+                element("b", { text: "现在" }),
+                element("p", { text: story.after }),
+              ]),
+            ]),
+            element("p", { className: "evidence-line", text: "来自已记录的「以前 / 现在」变化" }),
+          ])
+        : emptyState("还没有新的变化", "这周还没有形成可确认的「以前 / 现在」变化。"),
+      element("article", { className: "word-growth" }, [
+        element("span", { className: "mini-kite", attributes: { "aria-hidden": "true" } }),
+        element("div", {}, [
+          element("b", { text: "生活里的英语" }),
+          element("p", { text: wordGrowthCopy(model) }),
+        ]),
+      ]),
+      model.retreat
+        ? element("p", { className: "quiet-note", text: `${model.retreat.summary} ${model.retreat.explanation}` })
+        : null,
+    ], "growth-section", "leaf"),
+  );
 }
 
 function renderMemoryItem(item) {
-  const label = item.label || ({ moment: "专属瞬间", attention: "留意", growth: "成长" }[item.kind]);
-  const article = element("article", { attributes: { "data-projection-id": item.id || "" } });
-  article.append(element("div", { className: "timeline-meta" }, [
-    element("span", { className: `memory-label ${item.kind}`, text: label }),
-    element("time", { text: formatMomentTime(item.occurredAt), attributes: item.occurredAt ? { datetime: item.occurredAt } : {} }),
-  ]));
-  if (item.title) article.append(element("h3", { text: item.title }));
-  if (item.summary) article.append(element("p", { text: item.summary }));
+  const article = element("article", {
+    className: "memory-entry",
+    attributes: { "data-projection-id": item.id || "" },
+  }, [
+    element("div", { className: `memory-symbol ${item.kind}`, attributes: { "aria-hidden": "true" } }),
+    element("div", { className: "memory-copy" }, [
+      element("div", { className: "timeline-meta" }, [
+        element("span", { className: `memory-label ${item.kind}`, text: item.label || "共同经历" }),
+        element("time", {
+          text: formatMomentTime(item.occurredAt),
+          attributes: item.occurredAt ? { datetime: item.occurredAt } : {},
+        }),
+      ]),
+      item.title ? element("h3", { text: item.title }) : null,
+      item.summary ? element("p", { text: item.summary }) : null,
+    ]),
+  ]);
+
   if (item.transition) {
-    article.append(element("div", { className: "growth-transition", attributes: { "aria-label": "成长前后变化" } }, [
-      item.transition.before ? element("div", { className: "transition-before", text: item.transition.before }) : null,
-      item.transition.after ? element("div", { className: "transition-after", text: item.transition.after }) : null,
+    article.querySelector(".memory-copy").append(element("div", { className: "growth-transition" }, [
+      item.transition.before ? element("span", { text: item.transition.before }) : null,
+      item.transition.after ? element("span", { text: item.transition.after }) : null,
     ]));
   }
   if (item.childChoice || item.keepsake) {
-    article.append(element("div", { className: "choice-card", attributes: { "aria-label": "孩子公开选择与信物" } }, [
-      item.childChoice ? element("div", { className: "choice-row" }, [
+    article.querySelector(".memory-copy").append(element("div", { className: "choice-card" }, [
+      item.childChoice ? element("p", {}, [
         element("span", { text: item.childChoice.label }),
         element("b", { text: item.childChoice.value }),
       ]) : null,
-      item.keepsake ? element("div", { className: "keepsake-row" }, [
-        element("span", { text: "信物" }),
+      item.keepsake ? element("p", {}, [
+        element("span", { text: "共同信物" }),
         element("b", { text: item.keepsake.label || "未命名信物" }),
-        item.keepsake.description ? element("em", { text: item.keepsake.description }) : null,
       ]) : null,
     ]));
   }
   return element("li", {}, [article]);
 }
 
-function renderMemory(panel, model) {
-  const content = [
-    viewHeader("记忆库", "重要共同经历的家长可读时间线"),
-  ];
+function actionRow(label, value, action, className = "") {
+  return element("button", {
+    className: `action-row ${className}`.trim(),
+    attributes: { type: "button", [action]: "true" },
+  }, [
+    element("span", { text: label }),
+    element("span", { className: "action-value", text: value }),
+    element("span", { className: "chevron", text: "›", attributes: { "aria-hidden": "true" } }),
+  ]);
+}
 
+function renderMemory(panel, model) {
+  latestRedLines = model.redLines;
+  const content = [pageHeader("记忆", "共同经历会被整理，而不是逐字保存")];
   if (model.items.length) {
-    content.push(element("ol", { className: "timeline", attributes: { "aria-label": "统一记忆时间线" } },
+    content.push(element("ol", { className: "timeline", attributes: { "aria-label": "共同经历时间线" } },
       model.items.map(renderMemoryItem),
     ));
   } else {
-    content.push(emptyCard("还没有记忆片段", "共同经历会在会话结束后整理成家长可读的时间线。"));
+    content.push(emptyState("还没有记忆片段", "共同经历会在相处结束后整理到这里。"));
   }
 
-  const boundaryChildren = [element("p", { text: model.redLineExplanation })];
-  if (model.redLines.length) {
-    boundaryChildren.push(element("div", { className: "red-lines", attributes: { "aria-label": "当前红线话题" } },
-      model.redLines.map((line) => element("span", { className: "red-line", text: line })),
-    ));
-  } else {
-    boundaryChildren.push(element("p", { className: "secondary", text: "当前没有设置红线话题。" }));
+  if (model.nextCursor) {
+    content.push(element("div", { className: "memory-pagination" }, [
+      element("p", {
+        className: "memory-more-status",
+        text: memoryPageLoading ? "正在读取更早记忆" : "还有更早记忆",
+        attributes: { "aria-live": "polite" },
+      }),
+      element("button", {
+        className: "secondary-button memory-more-button",
+        text: memoryPageLoading ? "正在加载…" : "加载更早记忆",
+        attributes: {
+          type: "button",
+          "data-load-more-memory": "true",
+          disabled: memoryPageLoading ? "" : null,
+          "aria-busy": memoryPageLoading ? "true" : "false",
+        },
+      }),
+      memoryPageError
+        ? element("p", { className: "memory-page-error", text: memoryPageError, attributes: { role: "alert" } })
+        : null,
+    ]));
   }
 
-  const rightsButton = element("button", {
-    className: "secondary-button",
-    text: "查看说明",
-    attributes: { type: "button", "data-open-rights": "true" },
-  });
-  boundaryChildren.push(element("div", { className: "rights-entry" }, [
-    element("div", {}, [
-      element("b", { text: "数据权利" }),
-      element("p", { text: model.rights.statusNote || "导出与账户注销走独立流程。" }),
+  content.push(contentSection("关系与数据边界", [
+    element("div", { className: "settings-list light-settings" }, [
+      actionRow("红线话题", model.redLines.length ? `${model.redLines.length} 项` : "未设置", "data-open-boundaries"),
+      actionRow("数据权利", model.rights.statusNote || "导出与注销说明", "data-open-rights"),
     ]),
-    rightsButton,
-  ]));
-  content.push(contentSection("边界", boundaryChildren));
+    element("p", { className: "boundary-note", text: model.redLineExplanation }),
+  ], "memory-boundaries", "shield"));
   panel.replaceChildren(...content);
 }
 
-function policyList(rows, label) {
-  const list = element("ul", { className: "policy-list", attributes: { "aria-label": label } });
-  for (const row of rows) {
-    list.append(element("li", { className: "policy-row" }, [
-      element("b", { text: row.label }),
-      element("span", { text: row.value }),
-    ]));
-  }
-  return list;
+function timeValue(start, end) {
+  if (!start && !end) return "未设置";
+  return [start, end].filter(Boolean).join("–");
+}
+
+function staticRow(label, value, className = "") {
+  return element("div", { className: `setting-row ${className}`.trim() }, [
+    element("span", { text: label }),
+    element("strong", { text: value }),
+  ]);
+}
+
+function guardianTimeRows(model) {
+  const details = model.windowDetails || [];
+  const bedtimeWindow = details.find((window) => /睡前|夜灯/.test(window.label));
+  const availableWindow = details.find((window) => window !== bedtimeWindow) || details[0];
+  return [
+    staticRow("可用时段", availableWindow ? timeValue(availableWindow.start, availableWindow.end) : "未设置"),
+    staticRow("睡前时段", bedtimeWindow
+      ? timeValue(bedtimeWindow.start, bedtimeWindow.end)
+      : model.bedtime ? `${model.bedtime} 前` : "未设置"),
+    staticRow("每日相处", model.dailyLimitMinutes ? `最多 ${model.dailyLimitMinutes} 分钟` : model.dailyLimit),
+  ];
 }
 
 function renderGuardian(panel, model) {
-  const content = [viewHeader("守护", "时间、话题、身份与通知", "只读")];
-  const hasPolicies = model.windows.length || model.redLines.length || model.notifications.length || model.bedtime;
-  if (!hasPolicies) {
-    content.push(emptyCard("守护策略还未准备好", "策略可用后会在这里以只读摘要显示。"));
-  }
-
-  const timeRows = model.windows.map((window) => ({ label: "可用时段", value: window }));
-  timeRows.push({ label: "每日相处", value: model.dailyLimit });
-  if (model.bedtime) timeRows.push({ label: "夜间休眠", value: `${model.bedtime} 后休息` });
-  content.push(contentSection("时间", [policyList(timeRows, "时间守护策略")]));
-
-  content.push(contentSection("设备", [policyList([{
-    label: model.device.label,
-    value: model.device.status,
-  }], "设备守护状态")]));
-
-  content.push(contentSection("话题红线", [
-    element("p", { text: "红线限制未来主动提起，不会删除或改写已经发生的经历。" }),
-    model.redLines.length
-      ? element("div", { className: "red-lines", attributes: { "aria-label": "红线话题" } },
-          model.redLines.map((line) => element("span", { className: "red-line", text: line })))
-      : element("p", { className: "secondary", text: "当前没有设置红线话题。" }),
-  ]));
-
-  content.push(contentSection("AI 身份说明", [
-    element("div", { className: "section-heading" }, [
-      element("p", { text: model.aiIdentity.message }),
-      model.aiIdentity.fixed ? element("span", { className: "fixed-badge", text: "系统固定" }) : null,
+  latestRedLines = model.redLines;
+  panel.replaceChildren(
+    element("header", { className: "page-header guardian-header" }, [
+      element("div", {}, [
+        element("h2", { text: "守护" }),
+        element("p", { text: "这些边界在相处之外生效" }),
+      ]),
+      element("span", { className: "device-status", text: model.device.status }),
     ]),
-  ]));
-
-  if (model.notifications.length) {
-    content.push(contentSection("通知偏好", [policyList(model.notifications, "通知策略摘要")]));
-  }
-  panel.replaceChildren(...content);
+    contentSection("相处时间", [
+      element("div", { className: "settings-list" }, guardianTimeRows(model)),
+    ], "guardian-group", "time"),
+    contentSection("关系边界", [
+      element("div", { className: "settings-list" }, [
+        actionRow("红线话题", model.redLines.length ? `${model.redLines.length} 项` : "未设置", "data-open-boundaries"),
+        staticRow("AI 身份", model.aiIdentity.message, "identity-row"),
+      ]),
+    ], "guardian-group", "heart"),
+    contentSection("数据权利", [
+      element("div", { className: "settings-list" }, [
+        actionRow("导出共同经历", "流程说明", "data-open-rights"),
+        actionRow("账户注销与彻底销毁", "", "data-open-rights", "destructive-row"),
+      ]),
+    ], "guardian-group", "data"),
+    ...(model.notifications.length ? [contentSection("提醒偏好", [
+      element("div", { className: "settings-list" },
+        model.notifications.map((notification) => staticRow(notification.label, notification.value, "notification-row")),
+      ),
+    ], "guardian-group", "bell")] : []),
+    element("p", { className: "night-note" }, [
+      element("span", { className: "tiny-lamp", attributes: { "aria-hidden": "true" } }),
+      element("span", { text: "睡前时段会自然变慢、变暗、变安静" }),
+    ]),
+    element("button", {
+      className: "welcome-replay",
+      text: "重新查看欢迎设置",
+      attributes: { type: "button", "data-show-welcome": "true" },
+    }),
+  );
 }
 
 const renderers = {
@@ -383,6 +442,12 @@ async function loadTab(tab, { force = false } = {}) {
   const current = tabStore[tab];
   if (!force && ["loading", "ready"].includes(current.status)) return;
 
+  if (tab === "memory" && force) {
+    controllers.get("memory-page")?.abort();
+    memoryPageLoading = false;
+    memoryPageError = "";
+  }
+
   controllers.get(tab)?.abort();
   const controller = new AbortController();
   controllers.set(tab, controller);
@@ -406,9 +471,42 @@ async function loadTab(tab, { force = false } = {}) {
   }
 }
 
+async function loadMoreMemory() {
+  const current = tabStore.memory;
+  const cursor = current.data?.nextCursor;
+  if (memoryPageLoading || current.status !== "ready" || !cursor) return;
+
+  controllers.get("memory-page")?.abort();
+  const controller = new AbortController();
+  controllers.set("memory-page", controller);
+  memoryPageLoading = true;
+  memoryPageError = "";
+  renderTab("memory");
+
+  try {
+    const payload = await api.load("memory", { signal: controller.signal, cursor });
+    const nextPage = memoryViewModel(payload);
+    const merged = mergeMemoryViewModels(current.data, nextPage);
+    const newItemCount = merged.items.length - current.data.items.length;
+    tabStore = setTabSuccess(tabStore, "memory", merged);
+    announce(newItemCount ? `已加载 ${newItemCount} 条更早记忆` : "没有更多可显示的记忆");
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    memoryPageError = error instanceof Error ? error.message : "更早记忆暂时没有加载出来";
+    announce("更早记忆加载失败");
+  } finally {
+    if (controllers.get("memory-page") === controller) controllers.delete("memory-page");
+    memoryPageLoading = false;
+    if (tabStore.memory.status === "ready") renderTab("memory");
+  }
+}
+
 function activateTab(tab, { focus = false, updateHash = true } = {}) {
   if (!PARENT_TABS.includes(tab)) return;
+  const changed = activeTab !== tab;
   activeTab = tab;
+  document.body.classList.toggle("night-mode", tab === "guardian");
+  appShell.dataset.activeTab = tab;
   for (const candidate of PARENT_TABS) {
     const selected = candidate === tab;
     const button = tabButtons.get(candidate);
@@ -417,8 +515,9 @@ function activateTab(tab, { focus = false, updateHash = true } = {}) {
     panels.get(candidate).hidden = !selected;
   }
   if (focus) tabButtons.get(tab).focus();
+  if (changed) window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   if (updateHash && window.location.hash !== `#${tab}`) {
-    window.history.replaceState(null, "", `#${tab}`);
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}#${tab}`);
   }
   loadTab(tab);
 }
@@ -435,14 +534,77 @@ function moveTabFocus(event) {
   activateTab(PARENT_TABS[nextIndex], { focus: true });
 }
 
+function storageGet(key) {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Private browsing can deny storage; the current session still proceeds.
+  }
+}
+
+function shouldShowWelcome() {
+  const forced = new URLSearchParams(window.location.search).get("welcome");
+  if (forced === "1") return true;
+  if (forced === "0") return false;
+  return storageGet(WELCOME_KEY) !== "complete";
+}
+
+function showWelcome() {
+  appShell.hidden = true;
+  welcomeView.hidden = false;
+  document.body.classList.remove("night-mode");
+}
+
+function showApp() {
+  welcomeView.hidden = true;
+  appShell.hidden = false;
+  document.body.classList.toggle("night-mode", activeTab === "guardian");
+}
+
+function completeWelcome() {
+  storageSet(WELCOME_KEY, "complete");
+  const url = new URL(window.location.href);
+  url.searchParams.delete("welcome");
+  window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash || `#${activeTab}`}`);
+  showApp();
+  document.querySelector("#app-main").focus({ preventScroll: true });
+  announce("欢迎设置已完成，已进入成长手册");
+}
+
+function openDialog(dialog, trigger) {
+  dialogTrigger = trigger;
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+
 function openRightsDialog(trigger) {
   const copy = rightsDialogModel();
-  rightsTrigger = trigger;
   rightsTitle.textContent = copy.title;
   rightsBody.textContent = copy.body;
   rightsNotice.textContent = copy.demoNotice;
-  if (typeof rightsDialog.showModal === "function") rightsDialog.showModal();
-  else rightsDialog.setAttribute("open", "");
+  openDialog(rightsDialog, trigger);
+}
+
+function openBoundaryDialog(trigger) {
+  boundaryList.replaceChildren(...(
+    latestRedLines.length
+      ? latestRedLines.map((line) => element("span", { text: line }))
+      : [element("p", { className: "secondary", text: "当前没有设置红线话题。" })]
+  ));
+  openDialog(boundaryDialog, trigger);
+}
+
+function restoreDialogFocus() {
+  dialogTrigger?.focus();
+  dialogTrigger = null;
 }
 
 for (const [tab, button] of tabButtons) {
@@ -451,19 +613,32 @@ for (const [tab, button] of tabButtons) {
 }
 
 document.querySelector("#app-main").addEventListener("click", (event) => {
+  const loadMore = event.target.closest("[data-load-more-memory]");
+  if (loadMore) {
+    loadMoreMemory();
+    return;
+  }
   const retry = event.target.closest("[data-retry]");
   if (retry) {
     loadTab(retry.dataset.retry, { force: true });
     return;
   }
   const rights = event.target.closest("[data-open-rights]");
-  if (rights) openRightsDialog(rights);
+  if (rights) {
+    openRightsDialog(rights);
+    return;
+  }
+  const boundaries = event.target.closest("[data-open-boundaries]");
+  if (boundaries) {
+    openBoundaryDialog(boundaries);
+    return;
+  }
+  if (event.target.closest("[data-show-welcome]")) showWelcome();
 });
 
-rightsDialog.addEventListener("close", () => {
-  rightsTrigger?.focus();
-  rightsTrigger = null;
-});
+startButton.addEventListener("click", completeWelcome);
+rightsDialog.addEventListener("close", restoreDialogFocus);
+boundaryDialog.addEventListener("close", restoreDialogFocus);
 
 window.addEventListener("hashchange", () => {
   const requested = window.location.hash.slice(1);
@@ -474,6 +649,9 @@ window.addEventListener("hashchange", () => {
 
 const requestedTab = window.location.hash.slice(1);
 activateTab(PARENT_TABS.includes(requestedTab) ? requestedTab : "today");
+if (shouldShowWelcome()) showWelcome();
+else showApp();
+document.documentElement.classList.add("app-ready");
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {

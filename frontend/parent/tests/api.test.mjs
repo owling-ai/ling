@@ -7,8 +7,29 @@ test("maps every parent tab to an allowlisted projection endpoint", () => {
   assert.equal(endpointFor("today"), "/api/parent/today");
   assert.equal(endpointFor("growth"), "/api/parent/growth?period=week");
   assert.equal(endpointFor("memory"), "/api/parent/memory?limit=20");
+  assert.equal(endpointFor("memory", { cursor: "20" }), "/api/parent/memory?limit=20&cursor=20");
+  assert.equal(endpointFor("memory", { cursor: "20/next" }), "/api/parent/memory?limit=20&cursor=20%2Fnext");
   assert.equal(endpointFor("guardian"), "/api/parent/guardian");
   assert.throws(() => endpointFor("facts"), /Unknown parent projection/);
+});
+
+test("loads the next controlled memory page through the supported cursor", async () => {
+  const requests = [];
+  const parentApi = createParentApi(async (url, options) => {
+    requests.push({ url, options });
+    return {
+      ok: true,
+      json: async () => ({ items: [], next_cursor: null }),
+    };
+  });
+
+  await parentApi.load("memory", { cursor: "20" });
+
+  assert.equal(requests[0].url, "/api/parent/memory?limit=20&cursor=20");
+  assert.deepEqual(requests[0].options, {
+    headers: { Accept: "application/json" },
+    signal: undefined,
+  });
 });
 
 test("loads display-ready data through the requested parent projection only", async () => {

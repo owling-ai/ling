@@ -67,20 +67,35 @@ def _is_loopback_host(host: str) -> bool:
     return address.is_loopback or bool(mapped and mapped.is_loopback)
 
 
+def _allow_unauthenticated() -> bool:
+    return os.environ.get("LING_ALLOW_UNAUTHENTICATED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _has_proxy_headers(headers) -> bool:
+    return any(
+        headers.get(header)
+        for header in ("forwarded", "x-forwarded-for", "x-real-ip")
+    )
+
+
 def _is_local_request(request: Request) -> bool:
     client_host = request.client.host if request.client else ""
     if client_host == "testclient":
         return True
-    if any(
-        request.headers.get(header)
-        for header in ("forwarded", "x-forwarded-for", "x-real-ip")
-    ):
+    if _has_proxy_headers(request.headers):
         return False
     destination_host = request.url.hostname or ""
     return _is_loopback_host(client_host) and _is_loopback_host(destination_host)
 
 
 def _has_debug_access(request: Request) -> bool:
+    if _allow_unauthenticated():
+        return True
     if _is_local_request(request):
         return True
     return _has_admin_token(request.headers)
@@ -98,13 +113,12 @@ def _has_admin_token(headers) -> bool:
 
 
 def _has_websocket_debug_access(ws: WebSocket) -> bool:
+    if _allow_unauthenticated():
+        return True
     client_host = ws.client.host if ws.client else ""
     if client_host == "testclient":
         return True
-    has_proxy_headers = any(
-        ws.headers.get(header)
-        for header in ("forwarded", "x-forwarded-for", "x-real-ip")
-    )
+    has_proxy_headers = _has_proxy_headers(ws.headers)
     destination_host = ws.url.hostname or ""
     if (
         not has_proxy_headers
@@ -153,7 +167,6 @@ async def protect_private_apis(request: Request, call_next):
 
 CHILD_ID = db.CHILD_ID
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
-DESIGN = os.path.join(os.path.dirname(__file__), "..", "design")
 DEMO_MEDIA = os.path.join(os.path.dirname(__file__), "demo_media")
 
 
@@ -570,16 +583,6 @@ app.mount("/demo-media", StaticFiles(directory=DEMO_MEDIA), name="demo-media")
 app.mount("/child", StaticFiles(directory=os.path.join(FRONTEND, "child"), html=True), name="child-app")
 app.mount("/parent", StaticFiles(directory=os.path.join(FRONTEND, "parent"), html=True), name="parent-app")
 app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND, "assets")), name="assets")
-
-
-@app.get("/design")
-def design():
-    return FileResponse(os.path.join(DESIGN, "owling-app-design.html"))
-
-
-@app.head("/design")
-def design_head():
-    return FileResponse(os.path.join(DESIGN, "owling-app-design.html"))
 
 
 @app.get("/")

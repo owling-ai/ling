@@ -7,9 +7,12 @@ const PARENT_ENDPOINTS = Object.freeze({
   guardian: "/api/parent/guardian",
 });
 
-export function endpointFor(tab) {
+export function endpointFor(tab, { cursor } = {}) {
   const endpoint = PARENT_ENDPOINTS[tab];
   if (!endpoint) throw new Error(`Unknown parent projection: ${tab}`);
+  if (tab === "memory" && cursor !== undefined && cursor !== null && String(cursor).trim()) {
+    return `${endpoint}&cursor=${encodeURIComponent(String(cursor).trim())}`;
+  }
   return endpoint;
 }
 
@@ -30,10 +33,10 @@ export function createParentApi(fetchImplementation = globalThis.fetch?.bind(glo
   }
 
   return {
-    async load(tab, { signal } = {}) {
+    async load(tab, { signal, cursor } = {}) {
       let response;
       try {
-        response = await fetchImplementation(endpointFor(tab), {
+        response = await fetchImplementation(endpointFor(tab, { cursor }), {
           headers: { Accept: "application/json" },
           signal,
         });

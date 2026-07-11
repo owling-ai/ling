@@ -48,6 +48,13 @@ export function childRoute(hash = "#now") {
   return { name: "now" };
 }
 
+export function shouldShowWelcome(search = "", hasSeenWelcome = false) {
+  const preference = new URLSearchParams(String(search || "")).get("welcome");
+  if (preference === "1") return true;
+  if (preference === "0") return false;
+  return !Boolean(hasSeenWelcome);
+}
+
 export function worldRefreshDelay(nextTransitionAt, now = Date.now()) {
   if (!nextTransitionAt) return null;
   const transition = Date.parse(nextTransitionAt);
@@ -80,6 +87,11 @@ export function worldView(world = {}) {
     summary: isSleeping
       ? "它睡着后这里也会变安静，明早再来看它。"
       : event.summary || "新的故事还在路上。",
+    timeline: Array.isArray(event.timeline)
+      ? event.timeline
+        .filter((entry) => entry && (entry.at || entry.text))
+        .map((entry) => ({ at: String(entry.at || ""), text: String(entry.text || "") }))
+      : [],
     dollName: world.doll?.name || "灵灵",
     knownDays: Number(world.doll?.known_days || 0),
     media: isSleeping ? null : event.media || null,

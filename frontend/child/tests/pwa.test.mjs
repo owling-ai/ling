@@ -38,7 +38,20 @@ test("PWA shell exposes only the three child tabs and an announcement region", a
   assert.match(html, />奇遇</);
   assert.match(html, />口袋</);
   assert.match(html, /id="announcer"[^>]*aria-live="polite"/);
+  assert.doesNotMatch(html, /class="app-header"/);
   assert.doesNotMatch(html, /聊天|掌握度|家长控制台|管理|provider/i);
+});
+
+test("welcome is a first-run hatching screen with explicit demo overrides", async () => {
+  const source = await readText("app.mjs");
+
+  assert.match(source, /WELCOME_KEY = "ling-child-welcome-v1"/);
+  assert.match(source, /class="welcome-view"/);
+  assert.match(source, /你好，我是灵灵/);
+  assert.match(source, /data-action="enter-world"/);
+  assert.match(source, /localStorage\.setItem\(WELCOME_KEY, "seen"\)/);
+  assert.match(source, /shouldShowWelcome\(window\.location\.search, welcomeWasSeen\(\)\)/);
+  assert.match(source, /<\/section>`, "欢迎", \{ focus: false \}\)/);
 });
 
 test("child source never requests forbidden memory or provider endpoints", async () => {
@@ -56,7 +69,7 @@ test("app routes every server-provided media URL through the strict allowlist", 
     /safeMediaUrl\((?:media\.src|media\.poster|item\.image_url),\s*window\.location\.origin\)/g,
   ) || [];
 
-  assert.equal(guardedUrls.length, 3);
+  assert.equal(guardedUrls.length, 5);
   assert.doesNotMatch(source, /function safeAssetUrl\(/);
 });
 
@@ -191,7 +204,8 @@ test("service worker caches only the child shell and does not cache business API
   ]) {
     assert.ok(source.includes(`"${path}"`), `expected absolute shell path ${path}`);
   }
-  assert.match(source, /CACHE_NAME\s*=\s*`\$\{CACHE_PREFIX\}-v5`/);
+  assert.match(source, /CACHE_NAME\s*=\s*`\$\{CACHE_PREFIX\}-v7`/);
+  assert.match(source, /new Request\([\s\S]*cache:\s*"reload"/);
   assert.match(source, /pathname\.startsWith\("\/api\/"\)/);
   assert.doesNotMatch(source, /cache\.put\([^\n]*\/api\//);
   assert.match(source, /await self\.skipWaiting\(\)/);
@@ -208,6 +222,7 @@ test("styles preserve child readability, touch size, safe area, and reduced moti
 
   assert.match(css, /font-size:\s*16px/);
   assert.match(css, /min-height:\s*44px/);
+  assert.match(css, /h1\[tabindex="-1"\]:focus\s*\{\s*outline:\s*none/);
   assert.match(css, /env\(safe-area-inset-bottom\)/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
   assert.match(css, /@media\s*\(max-width:\s*320px\)/);
@@ -215,34 +230,46 @@ test("styles preserve child readability, touch size, safe area, and reduced moti
   assert.ok(contrastRatio(page, faint) >= 4.5, "day faint text must meet WCAG AA contrast");
 });
 
-test("now scene keeps text outside the fixed media surface and native controls", async () => {
+test("short welcome screens keep the CTA reachable without unlocking the now scene", async () => {
+  const css = await readText("styles.css");
+  const nowOverflow = cssRule(css, 'body[data-route="now"]');
+  const welcomeOverflow = cssRule(css, 'body[data-route="welcome"]');
+  const shortHeightRules = css.slice(css.indexOf("@media (max-height: 650px)"));
+  const shortWelcome = cssRule(shortHeightRules, ".welcome-view");
+
+  assert.match(nowOverflow, /overflow:\s*hidden/);
+  assert.match(welcomeOverflow, /overflow-y:\s*auto/);
+  assert.match(css, /body\[data-route="welcome"\] \.app-shell\s*\{\s*overflow:\s*visible/);
+  assert.match(shortWelcome, /height:\s*auto/);
+  assert.match(shortWelcome, /min-height:\s*100dvh/);
+  assert.match(shortWelcome, /grid-template-rows:\s*auto auto auto/);
+});
+
+test("now scene is a full-screen video surface with lightweight overlays", async () => {
   const source = await readText("app.mjs");
   const css = await readText("styles.css");
   const start = source.indexOf("function renderNow(world)");
   const end = source.indexOf("function formatDate", start);
   const nowSource = source.slice(start, end);
-  const worldScene = cssRule(css, ".world-scene");
-  const worldMedia = cssRule(css, ".world-media");
-  const sceneCopy = cssRule(css, ".scene-copy");
+  const mediaStart = source.indexOf("function worldMediaMarkup(media)");
+  const mediaEnd = source.indexOf("function renderNow(world)", mediaStart);
+  const worldMediaSource = source.slice(mediaStart, mediaEnd);
+  const worldVideo = cssRule(css, ".world-video");
+  const worldOverlay = cssRule(css, ".world-overlay");
 
-  assert.match(
-    nowSource,
-    /class="world-media"[\s\S]*class="scene-status"[\s\S]*<\/div>`\}\s*<\/div>\s*<div class="scene-copy">/,
-  );
-  assert.match(worldScene, /height:\s*auto/);
-  assert.match(worldScene, /overflow:\s*visible/);
-  assert.doesNotMatch(worldScene, /(?:min-)?height:\s*\d/);
-  assert.match(worldMedia, /position:\s*relative/);
-  assert.match(worldMedia, /height:\s*390px/);
-  assert.match(worldMedia, /overflow:\s*hidden/);
-  assert.match(sceneCopy, /position:\s*static/);
-  assert.doesNotMatch(sceneCopy, /position:\s*absolute/);
-
-  const mobileRules = css.slice(css.indexOf("@media (max-width: 320px)"));
-  const mobileWorldScene = cssRule(mobileRules, ".world-scene");
-  const mobileWorldMedia = cssRule(mobileRules, ".world-media");
-  assert.doesNotMatch(mobileWorldScene, /(?:min-)?height:\s*330px/);
-  assert.match(mobileWorldMedia, /height:\s*330px/);
+  assert.match(nowSource, /class="world-stage"/);
+  assert.match(nowSource, /class="world-media-layer"[\s\S]*class="world-overlay"/);
+  assert.match(nowSource, /class="scene-copy"[\s\S]*class="now-actions"/);
+  assert.match(nowSource, /class="scene-status">\$\{model\.isSleeping \? "晚安" : "此刻"\}/);
+  assert.match(nowSource, /class="world-timeline"/);
+  assert.doesNotMatch(nowSource, /now-sheet|app-header|LIVE/);
+  assert.match(worldMediaSource, /class="world-video"/);
+  assert.doesNotMatch(worldMediaSource, /\bcontrols\b/);
+  assert.match(css, /\.world-stage\s*\{\s*position:\s*relative;[\s\S]*?overflow:\s*hidden;/);
+  assert.match(worldVideo, /object-fit:\s*cover/);
+  assert.match(worldOverlay, /position:\s*absolute/);
+  assert.match(css, /\.now-view,[\s\S]*\.world-stage\s*\{[\s\S]*height:\s*100dvh/);
+  assert.match(css, /body\[data-route="now"\] #view[\s\S]*padding:\s*0/);
 });
 
 for (const size of [192, 512]) {

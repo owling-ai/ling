@@ -9,8 +9,10 @@ import {
   guardianViewModel,
   growthViewModel,
   memoryViewModel,
+  mergeMemoryViewModels,
   rightsDialogModel,
   createTabStore,
+  displayableConversationSuggestion,
   setTabError,
   setTabLoading,
   setTabSuccess,
@@ -37,6 +39,10 @@ test("today mood always carries the mandatory non-diagnostic disclaimer", () => 
   assert.equal(view.mood.summary, "整体放松，讲风筝时话变多了。");
   assert.equal(view.mood.disclaimer, MOOD_DISCLAIMER);
   assert.equal(view.metrics[0].display, "18 分钟");
+  assert.equal(view.minutesTogether, 18);
+  assert.equal(view.topicsCount, 3);
+  assert.equal(view.newWordsSpoken, 1);
+  assert.equal(view.hasActivity, true);
 });
 
 test("today mood empty state still carries the non-diagnostic disclaimer", () => {
@@ -46,9 +52,35 @@ test("today mood empty state still carries the non-diagnostic disclaimer", () =>
     summary: "",
     disclaimer: MOOD_DISCLAIMER,
   });
+  assert.equal(view.minutesTogether, null);
+  assert.equal(view.hasActivity, false);
 });
 
-test("growth exposes exactly the three trainer-manual mastery levels", () => {
+test("today treats explicit zero metrics as an honest quiet state", () => {
+  const view = todayViewModel({
+    metrics: { minutes_together: 0, topics_count: 0, new_words_spoken: 0 },
+    tonight: { summary: "下次可以聊聊月亮。" },
+  });
+
+  assert.equal(view.minutesTogether, 0);
+  assert.equal(view.topicsCount, 0);
+  assert.equal(view.newWordsSpoken, 0);
+  assert.equal(view.hasActivity, false);
+});
+
+test("conversation suggestion never replaces an unsafe template with invented copy", () => {
+  assert.equal(displayableConversationSuggestion({
+    attention: { conversationPrompt: "问问孩子 It's so {adj}!" },
+    tonight: { summary: "聊聊今天最喜欢的积木。" },
+  }), "聊聊今天最喜欢的积木。");
+  assert.equal(displayableConversationSuggestion({
+    attention: { conversationPrompt: "试试 {topic}" },
+    tonight: { summary: "下次说 noun" },
+  }), "");
+  assert.equal(displayableConversationSuggestion({}), "");
+});
+
+test("growth keeps the three controlled language exposure levels", () => {
   const view = growthViewModel({
     period_label: "本周",
     metrics: { spoken_attempts: 9, new_words: 3, mastered_words: 1 },
@@ -62,6 +94,7 @@ test("growth exposes exactly the three trainer-manual mastery levels", () => {
 
   assert.deepEqual(view.words.map((word) => word.levelLabel), ["听过", "听懂了", "会说了"]);
   assert.deepEqual(Object.keys(view.levelLabels), ["exposed", "recognized", "produced"]);
+  assert.deepEqual(view.growthMoments, []);
 });
 
 test("memory preserves an old-to-new growth transition without exposing a deletion target", () => {
@@ -114,6 +147,31 @@ test("memory exposes only controlled child choices and keepsakes", () => {
   assert.equal("rawConversation" in view.items[0], false);
 });
 
+test("memory keeps pagination state and appends every unique controlled item", () => {
+  const current = memoryViewModel({
+    items: Array.from({ length: 20 }, (_, index) => ({
+      id: `projection:${index}`,
+      title: `共同经历 ${index}`,
+    })),
+    next_cursor: "20",
+  });
+  const nextPage = memoryViewModel({
+    items: [
+      { id: "projection:19", title: "重复边界项" },
+      { id: "projection:20", title: "更早的共同经历" },
+    ],
+    next_cursor: null,
+  });
+
+  const merged = mergeMemoryViewModels(current, nextPage);
+
+  assert.equal(current.items.length, 20);
+  assert.equal(current.nextCursor, "20");
+  assert.equal(merged.items.length, 21);
+  assert.equal(merged.items[20].title, "更早的共同经历");
+  assert.equal(merged.nextCursor, null);
+});
+
 test("data-rights copy distinguishes red lines from account closure and offers no fake action", () => {
   const dialog = rightsDialogModel();
 
@@ -144,6 +202,13 @@ test("guardian policy is summarized as read-only display text", () => {
 
   assert.equal(view.readOnly, true);
   assert.equal(view.windows[0], "放学后 16:00-19:00");
+  assert.deepEqual(view.windowDetails[1], {
+    label: "睡前夜灯",
+    start: "20:00",
+    end: "21:00",
+  });
+  assert.equal(view.dailyLimitMinutes, 40);
+  assert.equal(view.usedTodayMinutes, 18);
   assert.equal(view.dailyLimit, "上限 40 分钟，今天已用 18 分钟");
   assert.equal(view.aiIdentity.fixed, true);
   assert.equal(view.notifications.length, 3);

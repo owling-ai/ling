@@ -100,6 +100,12 @@ function number(value, fallback = 0) {
   return Number.isFinite(result) ? result : fallback;
 }
 
+function optionalNumber(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const result = Number(value);
+  return Number.isFinite(result) ? result : null;
+}
+
 function stringList(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean);
@@ -116,27 +122,45 @@ export function todayViewModel(payload = {}) {
   assertProjectionSafe(payload);
   const metrics = payload.metrics || {};
   const moodSummary = text(payload.mood?.summary);
+  const minutesTogether = optionalNumber(metrics.minutes_together);
+  const topicsCount = optionalNumber(metrics.topics_count);
+  const newWordsSpoken = optionalNumber(metrics.new_words_spoken);
+  const attention = payload.attention && text(payload.attention.summary)
+    ? {
+        summary: text(payload.attention.summary),
+        conversationPrompt: text(payload.attention.conversation_prompt),
+      }
+    : null;
 
   return {
     date: text(payload.date),
     childName: text(payload.child_display_name, "孩子"),
     dollName: text(payload.doll_display_name, "灵灵"),
+    minutesTogether,
+    topicsCount,
+    newWordsSpoken,
+    hasActivity: [minutesTogether, topicsCount, newWordsSpoken].some((value) => value !== null && value > 0)
+      || attention !== null,
     metrics: [
       { label: "一起度过", display: formatMetric(metrics.minutes_together, "分钟") },
       { label: "聊到", display: formatMetric(metrics.topics_count, "件事") },
       { label: "新词开口", display: formatMetric(metrics.new_words_spoken, "个") },
     ],
     mood: { summary: moodSummary, disclaimer: MOOD_DISCLAIMER },
-    attention: payload.attention && text(payload.attention.summary)
-      ? {
-          summary: text(payload.attention.summary),
-          conversationPrompt: text(payload.attention.conversation_prompt),
-        }
-      : null,
+    attention,
     tonight: payload.tonight && text(payload.tonight.summary)
       ? { summary: text(payload.tonight.summary) }
       : null,
   };
+}
+
+export function displayableConversationSuggestion(model = {}) {
+  const candidates = [model.attention?.conversationPrompt, model.tonight?.summary];
+  return candidates.find((candidate) => (
+    typeof candidate === "string"
+      && candidate.trim()
+      && !/[{}]|\b(?:adj|noun|verb)\b/i.test(candidate)
+  ))?.trim() || "";
 }
 
 export function growthViewModel(payload = {}) {
@@ -215,6 +239,16 @@ export function memoryViewModel(payload = {}) {
   };
 }
 
+export function mergeMemoryViewModels(current, nextPage) {
+  const knownIds = new Set(current.items.map((item) => item.id).filter(Boolean));
+  const newItems = nextPage.items.filter((item) => !item.id || !knownIds.has(item.id));
+  return {
+    ...current,
+    ...nextPage,
+    items: [...current.items, ...newItems],
+  };
+}
+
 export function rightsDialogModel() {
   return {
     title: "数据权利说明",
@@ -241,12 +275,19 @@ export function guardianViewModel(payload = {}) {
 
   return {
     readOnly: true,
+    windowDetails: windows.map((window) => ({
+      label: text(window?.label),
+      start: text(window?.start),
+      end: text(window?.end),
+    })).filter((window) => window.label || window.start || window.end),
     windows: windows.map((window) => {
       const label = text(window?.label);
       const start = text(window?.start);
       const end = text(window?.end);
       return [label, start && end ? `${start}-${end}` : ""].filter(Boolean).join(" ");
     }).filter(Boolean),
+    dailyLimitMinutes: dailyLimit,
+    usedTodayMinutes: usedToday,
     dailyLimit: `上限 ${dailyLimit} 分钟，今天已用 ${usedToday} 分钟`,
     bedtime: text(payload.bedtime),
     device: {
