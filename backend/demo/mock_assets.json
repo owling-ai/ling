@@ -184,6 +184,30 @@
           "appearance": "blue"
         }
       }
+    },
+    {
+      "asset_id": "dinner-cooking-v1",
+      "media_kind": "image",
+      "event_key": "story_beat",
+      "event_value": "dinner_cooking",
+      "asset_group": "moment-dinner-cooking",
+      "semantic_version": 1,
+      "src": "lingling-dinner-cooking.png",
+      "poster": "lingling-dinner-cooking.png",
+      "mime_type": "image/png",
+      "width": 941,
+      "height": 1672,
+      "duration_ms": 4000,
+      "alt": "晚餐时间，灵灵在厨房里用木勺盛起橡果饭",
+      "sha256": {
+        "media": "bb56da6079e9af6735dada0ef3e81acb6a46ceeba862882b1902873a1e6996dd",
+        "poster": "bb56da6079e9af6735dada0ef3e81acb6a46ceeba862882b1902873a1e6996dd"
+      },
+      "moment": {
+        "title": "晚餐时间的橡果饭",
+        "story": "同一天晚餐时，灵灵把炉火调小，用木勺把热乎乎的橡果饭盛进盘子里。它说要先尝一口，看看够不够香。",
+        "keepsake": null
+      }
     }
   ]
 }

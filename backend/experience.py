@@ -511,7 +511,7 @@ class ExperienceService:
             raise ExperienceNotFound(f"moment not found: {moment_id}")
         detail = {
             "id": moment["id"],
-            "kind": "personal",
+            "kind": "public" if moment["source_type"] == "world_seed" else "personal",
             "status": moment["status"],
             "title": moment["title"],
         }

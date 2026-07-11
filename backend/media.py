@@ -340,8 +340,14 @@ def load_manifests(
             raise ManifestError(f"asset {asset_id} requires event_value")
         if not isinstance(asset_group, str) or not asset_group:
             raise ManifestError(f"asset {asset_id} requires asset_group")
-        if asset.get("media_kind") != "video" or asset.get("mime_type") != "video/mp4":
-            raise ManifestError(f"asset {asset_id} must be video/mp4")
+        media_kind = asset.get("media_kind")
+        mime_type = asset.get("mime_type")
+        if (media_kind, mime_type) not in {
+            ("video", "video/mp4"),
+            ("image", "image/png"),
+            ("image", "image/jpeg"),
+        }:
+            raise ManifestError(f"asset {asset_id} has unsupported media type")
         if width >= height:
             raise ManifestError(f"asset {asset_id} must be portrait-oriented")
         if not isinstance(asset.get("alt"), str) or not asset["alt"].strip():

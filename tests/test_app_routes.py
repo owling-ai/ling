@@ -158,5 +158,22 @@ def test_experience_seed_backfill_is_idempotent_and_preserves_memory(
     assert db.q1("SELECT text FROM facts WHERE id=?", (marker_id,)) == {
         "text": "这条旧记忆不能被体验种子重置"
     }
-    assert db.q1("SELECT COUNT(*) AS n FROM moments") == {"n": 2}
-    assert db.q1("SELECT COUNT(*) AS n FROM pocket_entries") == {"n": 1}
+    assert db.q1("SELECT COUNT(*) AS n FROM moments") == {"n": 5}
+    assert db.q1("SELECT COUNT(*) AS n FROM keepsakes") == {"n": 4}
+    assert db.q1("SELECT COUNT(*) AS n FROM pocket_entries") == {"n": 4}
+    service = experience.default_service(reload=True)
+    feed = service.child_feed(1)
+    pocket = service.pocket(1)
+    personal_ids = {
+        item["id"] for item in feed["items"] if item["kind"] == "personal"
+    }
+    dinner = next(item for item in feed["items"] if item["title"] == "晚餐时间的橡果饭")
+    assert dinner["kind"] == "public"
+    assert dinner["media"]["kind"] == "image"
+    assert {item["source_moment_id"] for item in pocket["items"]} <= personal_ids
+    assert {item["name"] for item in pocket["items"]} == {
+        "橡果蛋糕的小叉子",
+        "蓝色风筝尾带",
+        "晚安灯芯",
+        "小木桥的叶子",
+    }

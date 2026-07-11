@@ -44,128 +44,265 @@ def wipe():
 
 
 def _seed_experience() -> dict:
-    """Give both PWAs useful offline content before a live conversation exists."""
+    """Give child/parent demos useful projection content before live memory exists."""
     now = datetime.now().astimezone()
-    created_at = (now - timedelta(minutes=18)).isoformat(timespec="seconds")
-    published_at = (now - timedelta(minutes=17)).isoformat(timespec="seconds")
-    local_date = now.date().isoformat()
-    published_asset = media.default_catalog().asset("word-kite-v1")
-    published_asset_json = json.dumps(
-        media.asset_snapshot(published_asset, provider="mock"),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    db.execute(
-        "INSERT OR IGNORE INTO moments("
-        "child_id,source_type,source_id,event_key,event_value,semantic_version,idempotency_key,"
-        "local_date,title,story,status,published_asset_id,published_asset_json,created_at,published_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,'published',?,?,?,?)",
-        (
-            CHILD_ID,
-            "seed",
-            "kite",
-            "word_taught",
-            "kite",
-            1,
-            "seed:moment:kite:v1",
-            local_date,
-            "风筝终于飞起来啦",
-            "悠悠教会灵灵一个新词：kite。风一来，它就举着风筝喊 kite, fly!",
-            "word-kite-v1",
-            published_asset_json,
-            created_at,
-            published_at,
-        ),
-    )
-    moment_id = db.q1(
-        "SELECT id FROM moments WHERE idempotency_key='seed:moment:kite:v1'"
-    )["id"]
-    db.execute(
-        "UPDATE moments SET published_asset_json=? WHERE id=? "
-        "AND (published_asset_json IS NULL OR published_asset_json='')",
-        (published_asset_json, moment_id),
-    )
-    db.execute(
-        "INSERT OR IGNORE INTO generation_jobs("
-        "moment_id,attempt,media_kind,provider,asset_group,status,asset_id,idempotency_key,"
-        "created_at,ready_at,updated_at) VALUES(?,?,?,?,?,'succeeded',?,?,?,?,?)",
-        (
-            moment_id,
-            1,
-            "video",
-            "mock",
-            "moment-word-kite",
-            "word-kite-v1",
-            "seed:job:kite:1",
-            created_at,
-            published_at,
-            published_at,
-        ),
-    )
-    db.execute(
-        "INSERT OR IGNORE INTO keepsakes("
-        "child_id,moment_id,name,description,appearance,image_url,created_at) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (
-            CHILD_ID,
-            moment_id,
-            "风筝牌牌",
-            "第一次把 kite 说出口",
-            "amber",
-            "/demo-media/word-kite.png",
-            published_at,
-        ),
-    )
-    keepsake_id = db.q1(
-        "SELECT id FROM keepsakes WHERE moment_id=?", (moment_id,)
-    )["id"]
-    db.execute(
-        "INSERT OR IGNORE INTO pocket_entries(child_id,keepsake_id,collected,collected_at,updated_at) "
-        "VALUES(?,?,1,?,?)",
-        (CHILD_ID, keepsake_id, published_at, published_at),
-    )
+    specs = [
+        {
+            "source_id": "acorn-cake-fork",
+            "event_key": "canon_choice",
+            "event_value": "橡果味",
+            "idempotency_key": "seed:moment:birthday-party:v1",
+            "job_key": "seed:job:birthday-party:1",
+            "asset_id": "choice-cake-v1",
+            "asset_group": "moment-choice-cake",
+            "days_ago": 2,
+            "minutes_ago": 21,
+            "title": "橡果味的生日蛋糕",
+            "story": (
+                "你帮灵灵选了橡果味。第一口蛋糕切下来时，它把小叉子擦干净，"
+                "说这口要留给你。"
+            ),
+            "keepsake": {
+                "name": "橡果蛋糕的小叉子",
+                "description": "松鼠先生生日会那天",
+                "appearance": "cake clay fork",
+                "image_url": None,
+            },
+        },
+        {
+            "source_id": "kite-ribbon",
+            "event_key": "word_taught",
+            "event_value": "kite",
+            "idempotency_key": "seed:moment:kite:v1",
+            "job_key": "seed:job:kite:1",
+            "asset_id": "word-kite-v1",
+            "asset_group": "moment-word-kite",
+            "days_ago": 3,
+            "minutes_ago": 46,
+            "title": "蓝色尾带追上了风",
+            "story": (
+                "山坡上的风刚刚好。灵灵把蓝色尾带系到风筝上，跟着你小声念："
+                "kite, fly!"
+            ),
+            "keepsake": {
+                "name": "蓝色风筝尾带",
+                "description": "山坡上的风刚刚好",
+                "appearance": "mist blue kite ribbon",
+                "image_url": None,
+            },
+        },
+        {
+            "source_id": "bedtime-lamp",
+            "event_key": "growth_change",
+            "event_value": "fear_dark",
+            "idempotency_key": "seed:moment:bedtime-lamp:v1",
+            "job_key": "seed:job:bedtime-lamp:1",
+            "asset_id": "growth-stars-v1",
+            "asset_group": "moment-growth-stars",
+            "days_ago": 4,
+            "minutes_ago": 78,
+            "title": "晚安灯芯亮起来",
+            "story": (
+                "夜里风声很轻。灵灵把小夜灯调到星星一样的亮度，陪你一起把"
+                "今天收好。"
+            ),
+            "keepsake": {
+                "name": "晚安灯芯",
+                "description": "第一次一起收好夜晚",
+                "appearance": "star light candle gold",
+                "image_url": None,
+            },
+        },
+        {
+            "source_id": "bridge-leaf",
+            "event_key": "story_beat",
+            "event_value": "bridge_leaf",
+            "idempotency_key": "seed:moment:bridge-leaf:v1",
+            "job_key": "seed:job:bridge-leaf:1",
+            "asset_id": "story-party-v1",
+            "asset_group": "moment-story-party",
+            "days_ago": 5,
+            "minutes_ago": 112,
+            "title": "雨停后的小木桥",
+            "story": (
+                "雨停以后，橡树村的小木桥还亮着水光。灵灵捡起一片叶子，说"
+                "它像一张回家的小地图。"
+            ),
+            "keepsake": {
+                "name": "小木桥的叶子",
+                "description": "雨停以后",
+                "appearance": "green leaf pea bridge",
+                "image_url": None,
+            },
+        },
+        {
+            "source_type": "world_seed",
+            "source_id": "dinner-cooking",
+            "event_key": "story_beat",
+            "event_value": "dinner_cooking",
+            "idempotency_key": "seed:moment:dinner-cooking:v1",
+            "job_key": "seed:job:dinner-cooking:1",
+            "asset_id": "dinner-cooking-v1",
+            "asset_group": "moment-dinner-cooking",
+            "local_time": "18:32",
+            "title": "晚餐时间的橡果饭",
+            "story": (
+                "同一天晚餐时，灵灵把炉火调小，用木勺把热乎乎的橡果饭盛进"
+                "盘子里。它说要先尝一口，看看够不够香。"
+            ),
+            "keepsake": None,
+        },
+    ]
 
-    rendering_created = now.isoformat(timespec="seconds")
-    rendering_ready = (now + timedelta(seconds=3)).isoformat(timespec="seconds")
-    db.execute(
-        "INSERT OR IGNORE INTO moments("
-        "child_id,source_type,source_id,event_key,event_value,semantic_version,idempotency_key,"
-        "local_date,title,story,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'rendering',?)",
-        (
-            CHILD_ID,
-            "seed",
-            "birthday-party",
-            "story_beat",
-            "birthday_party",
-            1,
-            "seed:moment:birthday-party:v1",
-            local_date,
-            "蓝秋千旁挂满彩旗",
-            "生日会准备到了最热闹的一拍，灵灵正在把彩旗挂到蓝秋千旁。",
-            rendering_created,
-        ),
+    moment_ids: list[int] = []
+    for spec in specs:
+        if "local_time" in spec:
+            hour, minute = (int(part) for part in spec["local_time"].split(":", 1))
+            published_dt = now.replace(
+                hour=hour, minute=minute, second=0, microsecond=0
+            )
+            if published_dt > now:
+                published_dt -= timedelta(days=1)
+        else:
+            published_dt = now - timedelta(
+                days=spec["days_ago"], minutes=spec["minutes_ago"]
+            )
+        created_dt = published_dt - timedelta(minutes=1)
+        published_at = published_dt.isoformat(timespec="seconds")
+        created_at = created_dt.isoformat(timespec="seconds")
+        local_date = published_dt.date().isoformat()
+        asset = media.default_catalog().asset(spec["asset_id"])
+        asset_json = json.dumps(
+            media.asset_snapshot(asset, provider="mock"),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        db.execute(
+            "INSERT INTO moments("
+            "child_id,source_type,source_id,event_key,event_value,semantic_version,"
+            "idempotency_key,local_date,title,story,status,published_asset_id,"
+            "published_asset_json,created_at,published_at,error_code) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,'published',?,?,?,?, '') "
+            "ON CONFLICT(idempotency_key) DO UPDATE SET "
+            "source_type=excluded.source_type,source_id=excluded.source_id,"
+            "event_key=excluded.event_key,event_value=excluded.event_value,"
+            "semantic_version=excluded.semantic_version,local_date=excluded.local_date,"
+            "title=excluded.title,story=excluded.story,status='published',"
+            "published_asset_id=excluded.published_asset_id,"
+            "published_asset_json=excluded.published_asset_json,"
+            "published_at=excluded.published_at,error_code=''",
+            (
+                CHILD_ID,
+                spec.get("source_type", "seed"),
+                spec["source_id"],
+                spec["event_key"],
+                spec["event_value"],
+                1,
+                spec["idempotency_key"],
+                local_date,
+                spec["title"],
+                spec["story"],
+                spec["asset_id"],
+                asset_json,
+                created_at,
+                published_at,
+            ),
+        )
+        moment_id = db.q1(
+            "SELECT id FROM moments WHERE idempotency_key=?",
+            (spec["idempotency_key"],),
+        )["id"]
+        moment_ids.append(moment_id)
+        db.execute(
+            "INSERT INTO generation_jobs("
+            "moment_id,attempt,media_kind,provider,asset_group,status,asset_id,"
+            "idempotency_key,created_at,ready_at,updated_at) "
+            "VALUES(?,?,?,?,?,'succeeded',?,?,?, ?, ?) "
+            "ON CONFLICT(idempotency_key) DO UPDATE SET "
+            "moment_id=excluded.moment_id,media_kind=excluded.media_kind,"
+            "provider=excluded.provider,asset_group=excluded.asset_group,"
+            "status='succeeded',asset_id=excluded.asset_id,"
+            "ready_at=excluded.ready_at,updated_at=excluded.updated_at,error_code=''",
+            (
+                moment_id,
+                1,
+                asset["media_kind"],
+                "mock",
+                spec["asset_group"],
+                spec["asset_id"],
+                spec["job_key"],
+                created_at,
+                published_at,
+                published_at,
+            ),
+        )
+        keepsake = spec.get("keepsake")
+        if keepsake is not None:
+            db.execute(
+                "INSERT INTO keepsakes("
+                "child_id,moment_id,name,description,appearance,image_url,created_at) "
+                "VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(moment_id) DO UPDATE SET "
+                "name=excluded.name,description=excluded.description,"
+                "appearance=excluded.appearance,image_url=excluded.image_url",
+                (
+                    CHILD_ID,
+                    moment_id,
+                    keepsake["name"],
+                    keepsake["description"],
+                    keepsake["appearance"],
+                    keepsake["image_url"],
+                    published_at,
+                ),
+            )
+            keepsake_id = db.q1(
+                "SELECT id FROM keepsakes WHERE moment_id=?", (moment_id,)
+            )["id"]
+            db.execute(
+                "INSERT INTO pocket_entries("
+                "child_id,keepsake_id,collected,collected_at,updated_at) "
+                "VALUES(?,?,1,?,?) ON CONFLICT(child_id,keepsake_id) DO UPDATE SET "
+                "collected=1,"
+                "collected_at=COALESCE(pocket_entries.collected_at,excluded.collected_at),"
+                "updated_at=excluded.updated_at",
+                (CHILD_ID, keepsake_id, published_at, published_at),
+            )
+    _retire_stale_experience_seed(
+        {
+            spec["idempotency_key"]
+            for spec in specs
+        }
     )
-    rendering_id = db.q1(
-        "SELECT id FROM moments WHERE idempotency_key='seed:moment:birthday-party:v1'"
-    )["id"]
+    return {
+        "published_moment_id": moment_ids[0],
+        "published_moment_ids": moment_ids,
+        "seeded_keepsakes": sum(1 for spec in specs if spec.get("keepsake") is not None),
+        "rendering_moment_id": None,
+    }
+
+
+def _retire_stale_experience_seed(active_keys: set[str]) -> None:
+    stale_keys = {
+        "seed:moment:star-lamp:v1",
+        "seed:moment:oak-bridge:v1",
+    } - active_keys
+    if not stale_keys:
+        return
+    placeholders = ",".join("?" for _ in stale_keys)
+    params = tuple(sorted(stale_keys))
+    now = datetime.now().astimezone().isoformat(timespec="seconds")
     db.execute(
-        "INSERT OR IGNORE INTO generation_jobs("
-        "moment_id,attempt,media_kind,provider,asset_group,status,asset_id,idempotency_key,"
-        "created_at,ready_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?,?,?,?)",
-        (
-            rendering_id,
-            1,
-            "video",
-            "mock",
-            "moment-story-party",
-            "story-party-v1",
-            "seed:job:birthday-party:1",
-            rendering_created,
-            rendering_ready,
-            rendering_created,
-        ),
+        f"UPDATE pocket_entries SET collected=0,collected_at=NULL,updated_at=? "
+        f"WHERE keepsake_id IN ("
+        f"SELECT k.id FROM keepsakes k JOIN moments m ON m.id=k.moment_id "
+        f"WHERE m.idempotency_key IN ({placeholders}))",
+        (now, *params),
     )
-    return {"published_moment_id": moment_id, "rendering_moment_id": rendering_id}
+    db.execute(
+        f"UPDATE moments SET status='failed',error_code='retired_seed' "
+        f"WHERE idempotency_key IN ({placeholders})",
+        params,
+    )
 
 
 def ensure_experience_seeded() -> dict:
