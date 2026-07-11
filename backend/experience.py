@@ -185,11 +185,17 @@ class ExperienceService:
     def _start_retry(self, moment: dict, failed_job: dict) -> dict:
         next_attempt = failed_job["attempt"] + 1
         with db.transaction(immediate=True) as conn:
+            bound = conn.execute(
+                "SELECT * FROM generation_jobs WHERE id=? AND moment_id=?",
+                (failed_job["id"], moment["id"]),
+            ).fetchone()
             latest = conn.execute(
                 "SELECT * FROM generation_jobs WHERE moment_id=? ORDER BY attempt DESC LIMIT 1",
                 (moment["id"],),
             ).fetchone()
-            if latest["attempt"] >= next_attempt:
+            if not bound or bound["status"] != "failed":
+                return dict(latest)
+            if latest["id"] != bound["id"] or latest["attempt"] >= next_attempt:
                 return dict(latest)
             job_id = self.provider.submit(
                 {
@@ -208,6 +214,129 @@ class ExperienceService:
                 conn.execute("SELECT * FROM generation_jobs WHERE id=?", (job_id,)).fetchone()
             )
 
+    @staticmethod
+    def _media_error_code(error: media.MediaError) -> str:
+        return getattr(error, "code", None) or "media_error"
+
+    def _mark_job_failed_from_media_error(
+        self, job_id: int, error: media.MediaError
+    ) -> None:
+        db.execute(
+            "UPDATE generation_jobs SET status='failed',error_code=?,updated_at=? "
+            "WHERE id=? AND status!='failed'",
+            (self._media_error_code(error), _iso(self.now()), job_id),
+        )
+
+    def _resolve_polled_job(
+        self, moment_id: int, job_id: int, asset: dict | None = None
+    ) -> dict:
+        with db.transaction(immediate=True) as conn:
+            moment_row = conn.execute(
+                "SELECT * FROM moments WHERE id=?", (moment_id,)
+            ).fetchone()
+            if not moment_row:
+                raise ExperienceNotFound(f"moment not found: {moment_id}")
+            moment = dict(moment_row)
+            if moment["status"] in {"published", "failed"}:
+                return {"action": moment["status"]}
+
+            bound_row = conn.execute(
+                "SELECT * FROM generation_jobs WHERE id=? AND moment_id=?",
+                (job_id, moment_id),
+            ).fetchone()
+            if not bound_row:
+                raise ExperienceNotFound(
+                    f"generation job not found for moment: {moment_id}"
+                )
+            bound = dict(bound_row)
+            latest = dict(
+                conn.execute(
+                    "SELECT * FROM generation_jobs WHERE moment_id=? "
+                    "ORDER BY attempt DESC LIMIT 1",
+                    (moment_id,),
+                ).fetchone()
+            )
+
+            if latest["id"] != bound["id"]:
+                return {
+                    "action": "rendering",
+                    "attempt": latest["attempt"],
+                }
+
+            if bound["status"] == "failed":
+                if bound["attempt"] < MAX_GENERATION_ATTEMPTS:
+                    next_attempt = bound["attempt"] + 1
+                    retry_id = self.provider.submit(
+                        {
+                            "moment_id": moment_id,
+                            "attempt": next_attempt,
+                            "media_kind": "video",
+                            "event_key": moment["event_key"],
+                            "event_value": moment["event_value"],
+                            "semantic_version": moment["semantic_version"],
+                            "idempotency_key": (
+                                f'{moment["idempotency_key"]}:attempt:{next_attempt}'
+                            ),
+                            "allowed_asset_groups": [bound["asset_group"]],
+                        },
+                        conn=conn,
+                    )
+                    retry = conn.execute(
+                        "SELECT attempt FROM generation_jobs WHERE id=?", (retry_id,)
+                    ).fetchone()
+                    return {"action": "rendering", "attempt": retry["attempt"]}
+
+                conn.execute(
+                    "UPDATE moments SET status='failed',error_code=? "
+                    "WHERE id=? AND status='rendering' "
+                    "AND EXISTS (SELECT 1 FROM generation_jobs "
+                    "WHERE id=? AND moment_id=? AND attempt=? AND status='failed') "
+                    "AND NOT EXISTS (SELECT 1 FROM generation_jobs "
+                    "WHERE moment_id=? AND attempt>?)",
+                    (
+                        bound.get("error_code") or "generation_failed",
+                        moment_id,
+                        bound["id"],
+                        moment_id,
+                        bound["attempt"],
+                        moment_id,
+                        bound["attempt"],
+                    ),
+                )
+                return {"action": "failed"}
+
+            if bound["status"] != "succeeded":
+                return {"action": "rendering", "attempt": bound["attempt"]}
+
+            asset = asset or self.catalog.asset(bound["asset_id"])
+            published_at = _iso(self.now())
+            updated = conn.execute(
+                "UPDATE moments SET status='published',published_asset_id=?,published_at=?,"
+                "error_code='' WHERE id=? AND status='rendering' "
+                "AND published_asset_id IS NULL "
+                "AND EXISTS (SELECT 1 FROM generation_jobs "
+                "WHERE id=? AND moment_id=? AND status='succeeded')",
+                (asset["asset_id"], published_at, moment_id, bound["id"], moment_id),
+            ).rowcount
+            if updated:
+                keepsake = (asset.get("moment") or {}).get("keepsake")
+                if isinstance(keepsake, dict):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO keepsakes("
+                        "child_id,moment_id,name,description,appearance,image_url,created_at) "
+                        "VALUES(?,?,?,?,?,?,?)",
+                        (
+                            moment["child_id"],
+                            moment_id,
+                            keepsake["name"],
+                            keepsake["description"],
+                            keepsake["appearance"],
+                            keepsake.get("image_url"),
+                            published_at,
+                        ),
+                    )
+            return {"action": "published"}
+
     def refresh_moment(self, moment_id: int) -> dict:
         moment = db.q1("SELECT * FROM moments WHERE id=?", (moment_id,))
         if not moment:
@@ -217,61 +346,22 @@ class ExperienceService:
         job = self._latest_job(moment_id)
         if not job:
             raise ExperienceNotFound(f"generation job not found for moment: {moment_id}")
-        status = self.provider.poll(job["id"])
-        job = self._latest_job(moment_id)
-        if status == "failed":
-            if job["attempt"] < MAX_GENERATION_ATTEMPTS:
-                retry = self._start_retry(moment, job)
-                return {
-                    "id": moment_id,
-                    "kind": "personal",
-                    "status": "rendering",
-                    "attempt": retry["attempt"],
-                    "poll_after_ms": 700,
-                }
-            db.execute(
-                "UPDATE moments SET status='failed',error_code=? "
-                "WHERE id=? AND status='rendering'",
-                (job.get("error_code") or "generation_failed", moment_id),
-            )
-            return self.moment_detail(moment_id)
-        if status != "succeeded":
+        asset = None
+        try:
+            status = self.provider.poll(job["id"])
+            if status == "succeeded":
+                asset = self.provider.result(job["id"])
+        except media.MediaError as exc:
+            self._mark_job_failed_from_media_error(job["id"], exc)
+        resolution = self._resolve_polled_job(moment_id, job["id"], asset)
+        if resolution["action"] == "rendering":
             return {
                 "id": moment_id,
                 "kind": "personal",
                 "status": "rendering",
-                "attempt": job["attempt"],
+                "attempt": resolution["attempt"],
                 "poll_after_ms": 700,
             }
-
-        asset = self.provider.result(job["id"])
-        published_at = _iso(self.now())
-        with db.transaction(immediate=True) as conn:
-            current = dict(
-                conn.execute("SELECT * FROM moments WHERE id=?", (moment_id,)).fetchone()
-            )
-            if current["status"] == "rendering" and not current["published_asset_id"]:
-                conn.execute(
-                    "UPDATE moments SET status='published',published_asset_id=?,published_at=?,"
-                    "error_code='' WHERE id=? AND status='rendering' AND published_asset_id IS NULL",
-                    (asset["asset_id"], published_at, moment_id),
-                )
-                keepsake = (asset.get("moment") or {}).get("keepsake")
-                if isinstance(keepsake, dict):
-                    conn.execute(
-                        "INSERT OR IGNORE INTO keepsakes("
-                        "child_id,moment_id,name,description,appearance,image_url,created_at) "
-                        "VALUES(?,?,?,?,?,?,?)",
-                        (
-                            current["child_id"],
-                            moment_id,
-                            keepsake["name"],
-                            keepsake["description"],
-                            keepsake["appearance"],
-                            keepsake.get("image_url"),
-                            published_at,
-                        ),
-                    )
         return self.moment_detail(moment_id)
 
     def _keepsake_for_moment(self, moment_id: int) -> dict | None:
@@ -389,14 +479,22 @@ class ExperienceService:
         db.execute(
             "INSERT INTO pocket_entries(child_id,keepsake_id,collected,collected_at,updated_at) "
             "VALUES(?,?,?,?,?) ON CONFLICT(child_id,keepsake_id) DO UPDATE SET "
-            "collected=excluded.collected,collected_at=excluded.collected_at,"
-            "updated_at=excluded.updated_at",
+            "collected=excluded.collected,"
+            "collected_at=CASE WHEN pocket_entries.collected=1 AND excluded.collected=1 "
+            "THEN pocket_entries.collected_at ELSE excluded.collected_at END,"
+            "updated_at=CASE WHEN pocket_entries.collected=1 AND excluded.collected=1 "
+            "THEN pocket_entries.updated_at ELSE excluded.updated_at END",
             (child_id, keepsake_id, 1 if collected else 0, collected_at, now),
+        )
+        final = db.q1(
+            "SELECT collected,updated_at FROM pocket_entries "
+            "WHERE child_id=? AND keepsake_id=?",
+            (child_id, keepsake_id),
         )
         return {
             "keepsake_id": keepsake_id,
-            "collected": collected,
-            "updated_at": now,
+            "collected": bool(final["collected"]),
+            "updated_at": final["updated_at"],
         }
 
     def settle_session(self, session: dict, cold_result: dict) -> dict:
@@ -613,6 +711,14 @@ class ExperienceService:
         )
         return [{"before": row["before"], "after": row["after"]} for row in rows]
 
+    @staticmethod
+    def _parent_diary_summary(diary: dict, topics: list[str]) -> str:
+        topic_text = "、".join(topics[:2]) if topics else "一次谈心"
+        summary = diary.get("summary") or ""
+        if "TA说" in summary or "「" in summary or "」" in summary:
+            return f"这次主要聊了{topic_text}，原话不在家长投影中展示。"
+        return summary
+
     def parent_growth(
         self,
         child_id: int,
@@ -701,7 +807,7 @@ class ExperienceService:
                     "label": "共同经历",
                     "kind": "attention",
                     "title": "、".join(topics[:2]) if topics else "一次谈心",
-                    "summary": diary["summary"],
+                    "summary": self._parent_diary_summary(diary, topics),
                 }
             )
         for index, row in enumerate(

@@ -167,6 +167,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at TEXT,
     transcript_json TEXT DEFAULT '[]',
     processed INTEGER DEFAULT 0,
+    processing INTEGER NOT NULL DEFAULT 0,
+    processing_started_at TEXT,
     cold_result_json TEXT DEFAULT '{}'
 );
 
@@ -239,6 +241,15 @@ CREATE TABLE IF NOT EXISTS pocket_entries (
 def init_db():
     conn = get_conn()
     conn.executescript(SCHEMA)
+    session_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(sessions)").fetchall()
+    }
+    if "processing" not in session_columns:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN processing INTEGER NOT NULL DEFAULT 0"
+        )
+    if "processing_started_at" not in session_columns:
+        conn.execute("ALTER TABLE sessions ADD COLUMN processing_started_at TEXT")
     conn.commit()
 
 
@@ -262,7 +273,8 @@ def q1(sql, params=()):
 def execute(sql, params=()):
     conn = get_conn()
     cur = conn.execute(sql, params)
-    conn.commit()
+    if not getattr(_local, "transaction_active", False):
+        conn.commit()
     return cur.lastrowid
 
 
@@ -273,6 +285,7 @@ def transaction(immediate: bool = False):
     if conn.in_transaction:
         raise RuntimeError("nested database transactions are not supported")
     conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+    _local.transaction_active = True
     try:
         yield conn
     except Exception:
@@ -280,6 +293,8 @@ def transaction(immediate: bool = False):
         raise
     else:
         conn.commit()
+    finally:
+        _local.transaction_active = False
 
 
 def jloads(s, default=None):

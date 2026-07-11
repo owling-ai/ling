@@ -17,6 +17,7 @@ DEFAULT_WORLD_PATH = ROOT / "demo" / "base_world.json"
 DEFAULT_ASSETS_PATH = ROOT / "demo" / "mock_assets.json"
 DEFAULT_MEDIA_ROOT = ROOT / "demo_media"
 MEANINGFUL_EVENT_KEYS = {"word_taught", "canon_choice", "story_beat", "growth_change"}
+KEEPSAKE_APPEARANCES = {"amber", "clay", "pea", "blue"}
 
 
 class ManifestError(ValueError):
@@ -85,6 +86,30 @@ def _parse_hhmm(value: str) -> tuple[int, int]:
     if not 0 <= hour <= 23 or not 0 <= minute <= 59:
         raise ManifestError(f"invalid schedule time: {value!r}")
     return hour, minute
+
+
+def _validate_meaningful_moment(asset_id: str, asset: dict) -> None:
+    moment = asset.get("moment")
+    if not isinstance(moment, dict):
+        raise ManifestError(f"asset {asset_id} requires moment")
+    for field in ("title", "story"):
+        if not isinstance(moment.get(field), str) or not moment[field].strip():
+            raise ManifestError(f"asset {asset_id} requires moment.{field}")
+    if "keepsake" not in moment:
+        raise ManifestError(f"asset {asset_id} requires moment.keepsake")
+    keepsake = moment["keepsake"]
+    if keepsake is None:
+        return
+    if not isinstance(keepsake, dict):
+        raise ManifestError(f"asset {asset_id} has invalid keepsake")
+    for field in ("name", "description", "appearance"):
+        if not isinstance(keepsake.get(field), str) or not keepsake[field].strip():
+            raise ManifestError(f"asset {asset_id} requires keepsake.{field}")
+    if keepsake["appearance"] not in KEEPSAKE_APPEARANCES:
+        raise ManifestError(f"asset {asset_id} has invalid keepsake.appearance")
+    image_url = keepsake.get("image_url")
+    if image_url is not None and not isinstance(image_url, str):
+        raise ManifestError(f"asset {asset_id} has invalid keepsake.image_url")
 
 
 def _as_aware(value: datetime) -> datetime:
@@ -286,6 +311,8 @@ def load_manifests(
         seen_asset_ids.add(asset_id)
         if event_key != "base_world" and event_key not in MEANINGFUL_EVENT_KEYS:
             raise ManifestError(f"invalid event_key: {event_key}")
+        if event_key in MEANINGFUL_EVENT_KEYS:
+            _validate_meaningful_moment(asset_id, asset)
         if not isinstance(asset.get("event_value"), str) or not asset["event_value"]:
             raise ManifestError(f"asset {asset_id} requires event_value")
         if not isinstance(asset_group, str) or not asset_group:
@@ -407,10 +434,13 @@ class MockMediaProvider:
             status = "queued"
         if status != row["status"]:
             db.execute(
-                "UPDATE generation_jobs SET status=?, updated_at=? WHERE id=?",
-                (status, _iso(now), job_id),
+                "UPDATE generation_jobs SET status=?, updated_at=? WHERE id=? AND status=?",
+                (status, _iso(now), job_id, row["status"]),
             )
-        return status
+        final = db.q1("SELECT status FROM generation_jobs WHERE id=?", (job_id,))
+        if not final:
+            raise MediaNotFound(f"job not found: {job_id}")
+        return final["status"]
 
     def result(self, job_id: int) -> dict:
         status = self.poll(job_id)

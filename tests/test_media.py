@@ -5,6 +5,8 @@ import importlib
 import importlib.util
 import json
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -236,6 +238,78 @@ def test_manifest_rejects_missing_media(tmp_path: Path) -> None:
         media.load_manifests(world_path, assets_path, media_root)
 
 
+@pytest.mark.parametrize(
+    ("moment", "message"),
+    [
+        (None, "moment"),
+        ({"title": " ", "story": "故事", "keepsake": None}, "moment.title"),
+        ({"title": "标题", "story": " ", "keepsake": None}, "moment.story"),
+        ({"title": "标题", "story": "故事"}, "keepsake"),
+        (
+            {
+                "title": "标题",
+                "story": "故事",
+                "keepsake": {"name": "风筝牌牌", "appearance": "amber"},
+            },
+            "keepsake.description",
+        ),
+        (
+            {
+                "title": "标题",
+                "story": "故事",
+                "keepsake": {
+                    "name": "风筝牌牌",
+                    "description": "第一次说出 kite",
+                    "appearance": "legendary",
+                },
+            },
+            "keepsake.appearance",
+        ),
+    ],
+)
+def test_manifest_rejects_malformed_meaningful_moment_contract(
+    tmp_path: Path, moment: dict | None, message: str
+) -> None:
+    media = _media_module()
+    world_path, assets_path, media_root = _write_catalog(tmp_path)
+    payload = json.loads(assets_path.read_text(encoding="utf-8"))
+    meaningful = dict(payload["assets"][0])
+    meaningful.update(
+        {
+            "asset_id": "word-kite-v1",
+            "event_key": "word_taught",
+            "event_value": "kite",
+            "asset_group": "moment-word-kite",
+            "moment": moment,
+        }
+    )
+    payload["assets"].append(meaningful)
+    assets_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(media.ManifestError, match=message):
+        media.load_manifests(world_path, assets_path, media_root)
+
+
+def test_manifest_accepts_meaningful_moment_without_keepsake(tmp_path: Path) -> None:
+    media = _media_module()
+    world_path, assets_path, media_root = _write_catalog(tmp_path)
+    payload = json.loads(assets_path.read_text(encoding="utf-8"))
+    meaningful = dict(payload["assets"][0])
+    meaningful.update(
+        {
+            "asset_id": "story-party-v1",
+            "event_key": "story_beat",
+            "event_value": "birthday_party",
+            "asset_group": "moment-story-party",
+            "moment": {"title": "生日会开始啦", "story": "彩旗挂好了。", "keepsake": None},
+        }
+    )
+    payload["assets"].append(meaningful)
+    assets_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    catalog = media.load_manifests(world_path, assets_path, media_root)
+    assert catalog.asset("story-party-v1")["moment"]["keepsake"] is None
+
+
 def test_variant_assignment_is_stable(tmp_path: Path) -> None:
     media = _media_module()
     world_path, assets_path, media_root = _write_catalog(tmp_path)
@@ -327,3 +401,68 @@ def test_mock_provider_raises_typed_generation_failed(
     )
     with pytest.raises(media.MediaGenerationFailed, match="missing_asset"):
         provider.result(job_id)
+
+
+def test_concurrent_poll_cannot_regress_succeeded_job_to_running(
+    isolated_db: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    media = _media_module()
+    world_path, assets_path, media_root = _write_catalog(tmp_path)
+    catalog = media.load_manifests(world_path, assets_path, media_root)
+    created_at = datetime(2026, 7, 11, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    local = threading.local()
+    both_read_queued = threading.Barrier(2)
+    succeeded_written = threading.Event()
+
+    def now_fn() -> datetime:
+        both_read_queued.wait(timeout=2)
+        return local.now
+
+    provider = media.MockMediaProvider(catalog, now_fn=now_fn, delay_seconds=3)
+    moment_id = _insert_moment()
+    job_id = db.execute(
+        "INSERT INTO generation_jobs("
+        "moment_id,attempt,media_kind,provider,asset_group,status,asset_id,idempotency_key,"
+        "created_at,ready_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?,?,?,?)",
+        (
+            moment_id,
+            1,
+            "video",
+            "mock",
+            "world-hill-wind",
+            "hill-wind-a",
+            "job:poll-race",
+            created_at.isoformat(timespec="seconds"),
+            (created_at + timedelta(seconds=3)).isoformat(timespec="seconds"),
+            created_at.isoformat(timespec="seconds"),
+        ),
+    )
+    real_execute = db.execute
+
+    def ordered_execute(sql, params=()):
+        if sql.startswith("UPDATE generation_jobs SET status="):
+            if params[0] == "running":
+                assert succeeded_written.wait(timeout=2)
+            result = real_execute(sql, params)
+            if params[0] == "succeeded":
+                succeeded_written.set()
+            return result
+        return real_execute(sql, params)
+
+    monkeypatch.setattr(db, "execute", ordered_execute)
+
+    def poll_at(value: datetime) -> str:
+        local.now = value
+        return provider.poll(job_id)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        late = pool.submit(poll_at, created_at + timedelta(seconds=4))
+        early = pool.submit(poll_at, created_at + timedelta(seconds=1))
+        statuses = {late.result(timeout=3), early.result(timeout=3)}
+
+    assert statuses == {"succeeded"}
+    assert db.q1("SELECT status FROM generation_jobs WHERE id=?", (job_id,)) == {
+        "status": "succeeded"
+    }
