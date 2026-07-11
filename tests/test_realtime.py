@@ -288,6 +288,9 @@ def test_pcm_websocket_never_routes_gemini_to_native_audio(
         async def send_text(self, raw: str) -> None:
             self.messages.append(json.loads(raw))
 
+        async def receive_text(self) -> str:
+            raise RuntimeError("device disconnected")
+
         async def close(self) -> None:
             self.closed = True
 

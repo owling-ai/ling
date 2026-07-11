@@ -1488,7 +1488,13 @@ async def bridge(
                 "retryable": False,
             },
         )
-        await client.close()
+        try:
+            while True:
+                await client.receive_text()
+        except Exception:
+            pass
+        finally:
+            await client.close()
         return
     if not provider_available(provider):
         env_name = {
