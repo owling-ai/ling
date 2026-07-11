@@ -151,7 +151,7 @@ button:disabled { opacity: .5; cursor: not-allowed; transform: none; }
 .chat-head .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .chat-head button[hidden] { display: none; }
 .model-switch {
-  display: grid; grid-template-columns: repeat(3, 1fr); width: 270px; height: 38px;
+  display: grid; grid-template-columns: repeat(4, 1fr); width: 340px; height: 38px;
   padding: 3px; border: 1px solid #e7d7c4; border-radius: 8px; background: rgba(255,255,255,.72);
 }
 .model-switch button {

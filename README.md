@@ -84,9 +84,9 @@ export STEPFUN_API_KEY=...   # 可选；配置后可在前端切换到 StepFun
 cp .env.example .env   # 然后按需填写
 ```
 
-### 交互内核：Gemini Live / StepFun / 火山引擎 RTC
+### 交互内核：Gemini Live / StepFun / MiniCPM-o / 火山引擎 RTC
 
-配置任意一种后端凭证即可通话；配置多种时，聊天页可以实时切换模型。进入聊天页不会自动申请设备权限或连接模型，点击「接通」后才创建会话。默认使用支持音频与摄像头画面输入的预览模型 `gemini-3.1-flash-live-preview`；也保留 StepFun `stepaudio-2.5-realtime` 语音通道，并支持火山引擎「AI 音视频互动方案」。模型一轮说完后连续安静约 20 秒，会触发一次轻量陪伴回应；下一次至少间隔 45 秒，每场最多两次。第一次禁止带记忆和学习，第二次也只有当前话题或画面自然相关时才可带一个词。
+配置任意一种后端即可通话；配置多种时，聊天页可以实时切换模型。进入聊天页不会自动申请设备权限或连接模型。摄像头按钮是通话模式选项：接通前选中会直接发起视频通话，未选中则发起语音通话；通话中点击可在语音和视频之间切换。设备权限仍只会在真正接通时申请。默认使用支持音频与摄像头画面输入的预览模型 `gemini-3.1-flash-live-preview`；也保留 StepFun `stepaudio-2.5-realtime` 语音通道、局域网 MiniCPM-o 4.5 和火山引擎「AI 音视频互动方案」。支持后台文本控制的提供商在模型一轮说完后连续安静约 20 秒，会触发一次轻量陪伴回应；下一次至少间隔 45 秒，每场最多两次。
 
 ```bash
 export GEMINI_API_KEY=...
@@ -97,12 +97,21 @@ export LING_GEMINI_VOICE=Aoede
 export STEPFUN_API_KEY=...
 export LING_STEPFUN_VOICE=linjiajiejie
 
+# 可选：局域网 MiniCPM-o 4.5。API key 没有鉴权时可不设
+export LING_MINICPM_BASE_URL=http://192.168.1.9:9000/v1
+export LING_MINICPM_REALTIME_URL=ws://192.168.1.9:9000/v1/realtime
+export LING_MINICPM_MODEL=MiniCPM-o-4.5
+
 # 可选：指定默认提供商和 HTTP 代理
-export LING_REALTIME_PROVIDER=gemini
+export LING_REALTIME_PROVIDER=minicpm
 export HTTPS_PROXY=http://127.0.0.1:7890
 ```
 
 Gemini 和 StepFun 仍通过 `/api/realtime/ws?provider=gemini|stepfun` 由后端代理。Gemini 使用 16kHz 上行与 24kHz 下行 PCM；开启摄像头后，以 1 FPS 发送最长边 512px 的 JPEG 帧。StepFun 上下行均为 24kHz PCM，当前不发送视频。API key 不会下发到前端。
+
+MiniCPM 通过 `/api/realtime/ws?provider=minicpm&video=0|1` 代理。`LING_MINICPM_BASE_URL` 可填写 OpenAI compatible 的 `/v1` 基址，后端会推导同主机的 `/v1/realtime`；若部署路径不同，必须用 `LING_MINICPM_REALTIME_URL` 指向实际 WebSocket。局域网默认绕过系统代理，确需走代理时设置 `LING_MINICPM_USE_PROXY=1`。后端把浏览器的 16kHz PCM16 聚合为约一秒一包并转换为 float32 PCM，视频模式同时携带最近一张 JPEG；下行 24kHz float32 PCM 再转回浏览器统一使用的 PCM16。MiniCPM 的 `audio` / `video` 模式固定在上游 URL 中，因此通话中切换会短暂重连模型传输层，但继续使用同一个 Ling 业务会话。
+
+当前 MiniCPM-o 公开实时协议不返回用户 ASR 转写，也没有可用于后台冷场文本指令的事件，所以 MiniCPM 通道只展示模型输出字幕，且不启用自动冷场回应。模型输出文本仍会进入玩偶记忆闭环；孩子侧转写和依赖它的词汇产出记账，需要局域网服务后续提供兼容的 ASR 事件后才能补上。协议依据为官方 [Realtime API Overview](https://github.com/OpenBMB/MiniCPM-o-Demo/blob/main/docs-app/content/docs/en/realtime-api/overview.md)、[Audio Full-Duplex](https://github.com/OpenBMB/MiniCPM-o-Demo/blob/main/docs-app/content/docs/en/realtime-api/audio.md) 和 [Video Full-Duplex](https://github.com/OpenBMB/MiniCPM-o-Demo/blob/main/docs-app/content/docs/en/realtime-api/video.md)。
 
 火山引擎采用官方 RTC 架构：浏览器通过项目内固定的 `@volcengine/rtc@4.68.5` 加入房间并发布麦克风/摄像头，后端签发一小时 RTC Token，再以 IAM AK/SK 签名调用 `StartVoiceChat`、`UpdateVoiceChat` 和 `StopVoiceChat`。浏览器不会收到 RTC AppKey、AK 或 SK。请在火山控制台创建 **AI 音视频互动方案**应用，不要使用另一个商品「实时对话式 AI」的 AppId：
 
@@ -196,7 +205,7 @@ backend/
   db.py        SQLite schema（全部表）
   memory.py    L1-L4 读写 + 热路径记忆包组装
   engine.py    会话状态 + 编织追踪器（转写记账 / 撤退规则 / 正典写回）
-  realtime.py  Gemini / StepFun 实时代理（鉴权 + 协议转换 + 转写截获）
+  realtime.py  Gemini / StepFun / MiniCPM 实时代理（鉴权 + 协议转换 + 转写截获）
   volcengine_rtc.py  火山 RTC Token + OpenAPI 控制面 + 字幕记账
 frontend/assets/
   volcengine-rtc.min.js      官方 Web SDK 4.68.5

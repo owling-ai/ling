@@ -191,6 +191,18 @@ def test_legacy_console_consumes_sanitized_session_start_shape() -> None:
     assert "start.memory_pack" not in source
 
 
+def test_legacy_console_supports_preselected_video_and_minicpm_mode_switching() -> None:
+    source = (FRONTEND_ROOT / "assets" / "app.js").read_text(encoding="utf-8")
+
+    assert "let videoRequested = false" in source
+    assert "button.disabled = !supported || RT.videoSwitching" in source
+    assert 'query.set("video", videoMode ? "1" : "0")' in source
+    assert "restartMinicpmTransport()" in source
+    assert "if (!RT.on) return;" in source
+    assert "if (videoRequested && !await startVideo()) videoRequested = false" in source
+    assert 'speechStarted && RT.provider === "minicpm"' in source
+
+
 def test_remote_realtime_websocket_requires_debug_access(
     isolated_db: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -214,9 +226,13 @@ def test_remote_realtime_websocket_accepts_configured_token(
 ) -> None:
     monkeypatch.setenv("LING_ADMIN_TOKEN", "demo-test-token")
 
-    async def fake_bridge(ws, session_id: str, provider: str | None) -> None:
+    async def fake_bridge(
+        ws, session_id: str, provider: str | None, video: bool = False
+    ) -> None:
         await ws.accept()
-        await ws.send_json({"session_id": session_id, "provider": provider})
+        await ws.send_json(
+            {"session_id": session_id, "provider": provider, "video": video}
+        )
         await ws.close()
 
     monkeypatch.setattr(realtime, "bridge", fake_bridge)
@@ -228,11 +244,12 @@ def test_remote_realtime_websocket_accepts_configured_token(
         headers={"Authorization": "Bearer demo-test-token"},
     ) as remote:
         with remote.websocket_connect(
-            "/api/realtime/ws?session_id=private&provider=gemini"
+            "/api/realtime/ws?session_id=private&provider=minicpm&video=1"
         ) as socket:
             assert socket.receive_json() == {
                 "session_id": "private",
-                "provider": "gemini",
+                "provider": "minicpm",
+                "video": True,
             }
 
 
