@@ -1,4 +1,4 @@
-import { childApi, pollMomentUntilSettled } from "./api.mjs";
+import { childApi, loadPocketAfterMutation, pollMomentUntilSettled } from "./api.mjs";
 import {
   beginPocketChange,
   childRoute,
@@ -6,6 +6,7 @@ import {
   finishPocketChange,
   isPocketMutationCurrent,
   momentView,
+  pendingCardChanged,
   reconcileFeed,
   safeMediaUrl,
   worldRefreshDelay,
@@ -185,7 +186,8 @@ function pendingCard(item) {
     </article>`;
 }
 
-function updatePendingCard(item) {
+function updatePendingCard(previous, item) {
+  if (!pendingCardChanged(previous, item)) return;
   const card = [...view.querySelectorAll("[data-pending-id]")]
     .find((candidate) => candidate.dataset.pendingId === String(item.id));
   if (!card) return;
@@ -369,10 +371,11 @@ function startFeedPoll(item) {
     signal: controller.signal,
     onUpdate: (moment) => {
       if (!state.feed) return;
+      const previous = state.feed.pending.find((candidate) => candidate.id === String(moment.id));
       state.feed = reconcileFeed(state.feed, moment);
       if (moment.status === "rendering") {
         const pending = state.feed.pending.find((candidate) => candidate.id === String(moment.id));
-        if (pending && routeInfo().name === "adventures") updatePendingCard(pending);
+        if (pending && routeInfo().name === "adventures") updatePendingCard(previous, pending);
         return;
       }
       if (routeInfo().name === "adventures") renderFeed(state.feed, { focus: false });
@@ -381,16 +384,18 @@ function startFeedPoll(item) {
     },
   }).then((moment) => {
     if (moment.status === "timed_out" && state.feed) {
+      const previous = state.feed.pending.find((candidate) => candidate.id === String(moment.id));
       state.feed = reconcileFeed(state.feed, moment);
       const pending = state.feed.pending.find((candidate) => candidate.id === String(moment.id));
-      if (pending && routeInfo().name === "adventures") updatePendingCard(pending);
+      if (pending && routeInfo().name === "adventures") updatePendingCard(previous, pending);
       announce("生成还在继续，可以稍后重试查看。");
     }
   }).catch((error) => {
     if (error.name === "AbortError" || !state.feed) return;
+    const previous = state.feed.pending.find((candidate) => candidate.id === String(item.id));
     state.feed = reconcileFeed(state.feed, { id: item.id, status: "timed_out" });
     const pending = state.feed.pending.find((candidate) => candidate.id === String(item.id));
-    if (pending && routeInfo().name === "adventures") updatePendingCard(pending);
+    if (pending && routeInfo().name === "adventures") updatePendingCard(previous, pending);
     announce("生成状态暂时没连上，可以继续重试。");
   }).finally(() => {
     state.pollControllers.delete(key);
@@ -438,6 +443,9 @@ async function loadWorld(signal, version) {
 
 async function route() {
   const current = routeInfo();
+  const pendingPocketMutation = current.name === "pocket"
+    ? state.pocketMutation?.completion
+    : null;
   const version = ++state.routeVersion;
   state.routeController?.abort();
   clearWorldRefresh();
@@ -470,7 +478,7 @@ async function route() {
       renderFeed(feed);
       startFeedPolls(feed);
     } else if (current.name === "pocket") {
-      const payload = await childApi.pocket({ signal });
+      const payload = await loadPocketAfterMutation(childApi, pendingPocketMutation, { signal });
       if (version !== state.routeVersion) return;
       await backgroundWorld;
       if (version !== state.routeVersion) return;
@@ -495,10 +503,14 @@ async function togglePocket() {
   if (!keepsake || state.pocketBusy) return;
 
   const desired = !Boolean(keepsake.collected);
+  let resolveCompletion;
   const mutation = {
     token: `${item.id}:${keepsake.id}:${state.routeVersion}`,
     momentId: item.id,
     routeVersion: state.routeVersion,
+    completion: new Promise((resolve) => {
+      resolveCompletion = resolve;
+    }),
   };
   state.pocketMutation = mutation;
   const originalMoment = state.currentMoment;
@@ -537,6 +549,7 @@ async function togglePocket() {
     state.currentMoment = originalMoment;
     announce("刚才没有收好，已经恢复原来的状态。");
   } finally {
+    resolveCompletion();
     if (state.pocketMutation?.token !== mutation.token) return;
     const shouldRender = isPocketMutationCurrent(mutation, {
       token: state.pocketMutation.token,
@@ -563,7 +576,7 @@ view.addEventListener("click", (event) => {
         ...state.feed,
         pending: state.feed.pending.map((item) => item.id === retrying.id ? retrying : item),
       };
-      updatePendingCard(retrying);
+      updatePendingCard(pending, retrying);
       startFeedPoll(retrying);
     }
   }

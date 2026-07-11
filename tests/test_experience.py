@@ -338,3 +338,17 @@ def test_pocket_membership_is_idempotent_and_uncollect_keeps_row(
         "SELECT collected FROM pocket_entries WHERE child_id=? AND keepsake_id=?",
         (1, keepsake_id),
     ) == {"collected": 0}
+
+    removed_timestamps = db.q1(
+        "SELECT collected_at,updated_at FROM pocket_entries "
+        "WHERE child_id=? AND keepsake_id=?",
+        (1, keepsake_id),
+    )
+    clock[0] += timedelta(hours=1)
+    removed_again = experience_service.set_pocket(1, keepsake_id, False)
+    assert removed_again == removed
+    assert db.q1(
+        "SELECT collected_at,updated_at FROM pocket_entries "
+        "WHERE child_id=? AND keepsake_id=?",
+        (1, keepsake_id),
+    ) == removed_timestamps

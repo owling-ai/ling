@@ -4,6 +4,44 @@
 
 黑客松全套可运行 demo：**没有硬件也能完整演示** —— 网页就是玩偶，接通就直接说话、随时打断（Gemini Live / StepFun / 火山引擎 RTC，可在前端切换）。记忆系统（五层记忆、教材编织、数字生命）与语音链路解耦：**冷路径没有任何 API key 也照跑**，内置规则抽取器兜底。
 
+## 黑客松 Demo 入口
+
+一条命令启动后端、旧玩偶控制台、儿童端、家长端和本地 mock 图片/视频素材：
+
+```bash
+./run.sh
+```
+
+`run.sh` 默认使用 `LING_PROVIDER=mock`，即使本机 `.env` 里有真实 worker key，黑客松演示的会话结束与生成链路也不会被外部模型调用拖住；需要验证真实冷路径时再显式 `LING_PROVIDER=openai ./run.sh` 或 `LING_PROVIDER=anthropic ./run.sh`。
+
+打开这些入口：
+
+- `http://localhost:8888/`：旧网页玩偶/调试控制台，保留实时语音和记忆调试能力。
+- `http://localhost:8888/child`：儿童端「灵灵的窗口」，手机优先 PWA，展示全局基础世界、孩子私有瞬间和信物口袋。
+- `http://localhost:8888/parent`：家长端「训练师手册」，手机优先 PWA，只读取受控家长投影。
+- `http://localhost:8888/design`：已批准的积木 + 夜灯昼夜视觉稿。
+
+本轮黑客松不现场调用 Seedance/Veo。后端用 `MockMediaProvider` 模拟“提交生成 -> 渲染中 -> 发布”的状态机，实际展示读取 `backend/demo_media/` 下预生成的本地 MP4/PNG。彩排时可触发一个专属瞬间：
+
+```bash
+curl -X POST http://localhost:8888/api/admin/demo-moment \
+  -H 'Content-Type: application/json' \
+  -d '{"event_key":"canon_choice","event_value":"橡果味","source_id":"demo-1"}'
+```
+
+随后儿童端 feed 会先出现 `rendering`，约 2-4 秒后 `/api/moments/{id}` 发布本地视频与信物；收藏状态通过 `/api/pocket/{keepsake_id}` 持久化。
+
+常用验证命令：
+
+```bash
+.venv/bin/python -m pytest -q
+node --test frontend/child/tests/*.test.mjs
+node --test frontend/parent/tests/*.test.mjs
+.venv/bin/python -m compileall -q backend tests
+```
+
+明确延期到生产阶段的事项：真实 Seedance/Veo 接入、队列/对象存储/CMS、生产 ACL、多孩多账号、通知投递、完整账户注销销毁流程，以及家长端写入型设置。
+
 ## 快速开始（uv 管理环境）
 
 ```bash

@@ -89,6 +89,31 @@ test("memory preserves an old-to-new growth transition without exposing a deleti
   assert.equal("deleteUrl" in view.items[0], false);
 });
 
+test("memory exposes only controlled child choices and keepsakes", () => {
+  const view = memoryViewModel({
+    items: [{
+      id: "projection:moment:2",
+      occurred_at: "2026-07-11T20:10:00+08:00",
+      kind: "moment",
+      title: "给灵灵选了夜灯积木",
+      summary: "孩子把月亮积木放到灵灵旁边，当作睡前信号。",
+      child_choice: "今天选择月亮积木",
+      keepsake: { label: "月亮积木", description: "睡前放在枕边的信物" },
+    }],
+  });
+
+  assert.deepEqual(view.items[0].childChoice, {
+    label: "孩子选择",
+    value: "今天选择月亮积木",
+  });
+  assert.deepEqual(view.items[0].keepsake, {
+    label: "月亮积木",
+    description: "睡前放在枕边的信物",
+  });
+  assert.equal("childMessage" in view.items[0], false);
+  assert.equal("rawConversation" in view.items[0], false);
+});
+
 test("data-rights copy distinguishes red lines from account closure and offers no fake action", () => {
   const dialog = rightsDialogModel();
 
@@ -160,6 +185,33 @@ test("recursive projection guard normalizes snake_case and camelCase forbidden f
     "raw",
     "raw_text",
     "rawText",
+    "raw_conversation",
+    "rawConversation",
+    "conversation_log",
+    "conversationLog",
+    "messages",
+    "message_log",
+    "messageLog",
+    "utterance",
+    "utterances",
+    "child_utterance",
+    "childUtterance",
+    "assistant_utterance",
+    "assistantUtterance",
+    "child_message",
+    "childMessage",
+    "assistant_message",
+    "assistantMessage",
+    "full_text",
+    "fullText",
+    "audio_url",
+    "audioUrl",
+    "video_url",
+    "videoUrl",
+    "photo_url",
+    "photoUrl",
+    "image_url",
+    "imageUrl",
   ];
 
   for (const field of forbiddenFieldsUnderTest) {

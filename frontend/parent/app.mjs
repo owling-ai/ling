@@ -253,6 +253,19 @@ function renderMemoryItem(item) {
       item.transition.after ? element("div", { className: "transition-after", text: item.transition.after }) : null,
     ]));
   }
+  if (item.childChoice || item.keepsake) {
+    article.append(element("div", { className: "choice-card", attributes: { "aria-label": "孩子公开选择与信物" } }, [
+      item.childChoice ? element("div", { className: "choice-row" }, [
+        element("span", { text: item.childChoice.label }),
+        element("b", { text: item.childChoice.value }),
+      ]) : null,
+      item.keepsake ? element("div", { className: "keepsake-row" }, [
+        element("span", { text: "信物" }),
+        element("b", { text: item.keepsake.label || "未命名信物" }),
+        item.keepsake.description ? element("em", { text: item.keepsake.description }) : null,
+      ]) : null,
+    ]));
+  }
   return element("li", {}, [article]);
 }
 
@@ -354,9 +367,11 @@ function renderTab(tab) {
   const panel = panels.get(tab);
   const state = tabStore[tab];
   if (state.status === "loading") {
+    panel.setAttribute("aria-busy", "true");
     renderLoading(panel, tab);
     return;
   }
+  panel.removeAttribute("aria-busy");
   if (state.status === "error") {
     renderError(panel, tab, state.error);
     return;

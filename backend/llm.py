@@ -35,6 +35,8 @@ WORKER_EP = {
 }
 
 ANTHROPIC_WORKER_MODEL = os.environ.get("LING_ANTHROPIC_WORKER_MODEL", "claude-haiku-4-5")
+_EMPTY_KEYS = {"", "EMPTY", "NONE", "NULL", "TODO", "CHANGEME", "PLACEHOLDER"}
+_TRUTHY = {"1", "true", "yes", "on"}
 
 _anthropic_client = None
 
@@ -53,13 +55,58 @@ def _get_anthropic():
     return _anthropic_client
 
 
+def _worker_ep() -> dict:
+    """Read worker settings lazily so tests and local shells can override imports."""
+    return {
+        "base": _env(
+            "LING_WORKER_BASE_URL",
+            "LING_OPENAI_BASE_URL",
+            default=WORKER_EP.get("base", ""),
+        ).rstrip("/"),
+        "key": _env(
+            "LING_WORKER_API_KEY",
+            "LING_OPENAI_API_KEY",
+            default=WORKER_EP.get("key", "EMPTY"),
+        ),
+        "model": _env(
+            "LING_WORKER_MODEL",
+            "LING_OPENAI_MODEL",
+            default=WORKER_EP.get("model", "deepseek-chat"),
+        ),
+    }
+
+
+def _has_real_key(value: str) -> bool:
+    return value.strip().upper() not in _EMPTY_KEYS
+
+
+def _allow_empty_openai_key() -> bool:
+    return os.environ.get("LING_WORKER_ALLOW_EMPTY_KEY", "").lower() in _TRUTHY
+
+
+def _openai_ready(ep: dict) -> bool:
+    return bool(ep["base"]) and (_has_real_key(ep["key"]) or _allow_empty_openai_key())
+
+
+def _worker_timeout_seconds() -> float:
+    raw = os.environ.get("LING_WORKER_TIMEOUT_SECONDS", "10")
+    try:
+        timeout = float(raw)
+    except ValueError:
+        timeout = 10.0
+    return max(1.0, min(timeout, 120.0))
+
+
 def provider() -> str:
     forced = os.environ.get("LING_PROVIDER", "").lower()
+    ep = _worker_ep()
     if forced == "mock":
         return "mock"
-    if forced == "anthropic" and _get_anthropic():
-        return "anthropic"
-    if WORKER_EP["base"]:
+    if forced == "openai":
+        return "openai" if _openai_ready(ep) else "mock"
+    if forced == "anthropic":
+        return "anthropic" if _get_anthropic() else "mock"
+    if _openai_ready(ep):
         return "openai"
     if _get_anthropic():
         return "anthropic"
@@ -72,9 +119,12 @@ def worker_live() -> bool:
 
 def mode_info() -> dict:
     p = provider()
+    ep = _worker_ep()
     model = {"openai": WORKER_EP["model"], "anthropic": ANTHROPIC_WORKER_MODEL,
              "mock": "规则抽取器（无 API key 兜底）"}[p]
-    return {"worker_provider": p, "worker_model": model, "worker_base": WORKER_EP["base"]}
+    if p == "openai":
+        model = ep["model"]
+    return {"worker_provider": p, "worker_model": model, "worker_base": ep["base"]}
 
 
 # ---------------------------------------------------------------- OpenAI 兼容端点
@@ -99,7 +149,7 @@ def _openai_chat(ep: dict, messages: list, max_tokens: int) -> str | None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=_worker_timeout_seconds()) as resp:
             data = json.loads(resp.read())
         return (data["choices"][0]["message"]["content"] or "").strip()
     except Exception as e:
@@ -114,7 +164,7 @@ def worker_json(prompt: str, max_tokens: int = 2048):
     p = provider()
     text = None
     if p == "openai":
-        text = _openai_chat(WORKER_EP, [{"role": "user", "content": prompt}], max_tokens)
+        text = _openai_chat(_worker_ep(), [{"role": "user", "content": prompt}], max_tokens)
     elif p == "anthropic":
         client = _get_anthropic()
         try:

@@ -84,6 +84,24 @@ test("rendering polls update only their pending card until a terminal state", as
   assert.ok(renderingStart < localUpdate && localUpdate < earlyReturn && earlyReturn < terminalRender);
 });
 
+test("identical rendering updates leave the pending DOM and aria-live region untouched", async () => {
+  const source = await readText("app.mjs");
+  const updateStart = source.indexOf("function updatePendingCard(");
+  const updateEnd = source.indexOf("function momentCard", updateStart);
+  const updateSource = source.slice(updateStart, updateEnd);
+  const pollStart = source.indexOf("function startFeedPoll(item)");
+  const pollEnd = source.indexOf("function startFeedPolls(feed)", pollStart);
+  const pollSource = source.slice(pollStart, pollEnd);
+
+  assert.match(updateSource, /function updatePendingCard\(previous, item\)/);
+  assert.match(updateSource, /if \(!pendingCardChanged\(previous, item\)\) return;/);
+  assert.match(
+    pollSource,
+    /const previous = state\.feed\.pending\.find[\s\S]*state\.feed = reconcileFeed[\s\S]*updatePendingCard\(previous, pending\)/,
+  );
+  assert.match(pollSource, /moment\.status === "published"[\s\S]*announce\("新的专属瞬间已经画好了。"\)/);
+});
+
 test("world transition refresh is scheduled only for now and cleared on navigation", async () => {
   const source = await readText("app.mjs");
 
@@ -122,6 +140,27 @@ test("pocket success announcements follow the server-settled collection state", 
   assert.match(toggleSource, /const finalCollected = Boolean\(settled\.collected \?\? desired\);/);
   assert.match(toggleSource, /announce\(finalCollected \? "已经收进口袋。" : "已经移出口袋。"\);/);
   assert.doesNotMatch(toggleSource, /announce\(desired \?/);
+});
+
+test("pocket navigation waits for an in-flight collection before its GET", async () => {
+  const source = await readText("app.mjs");
+  const routeStart = source.indexOf("async function route()");
+  const routeEnd = source.indexOf("async function togglePocket()", routeStart);
+  const routeSource = source.slice(routeStart, routeEnd);
+  const toggleStart = source.indexOf("async function togglePocket()");
+  const toggleEnd = source.indexOf('view.addEventListener("click"', toggleStart);
+  const toggleSource = source.slice(toggleStart, toggleEnd);
+
+  assert.match(
+    routeSource,
+    /const pendingPocketMutation = current\.name === "pocket"\s*\? state\.pocketMutation\?\.completion\s*:\s*null;/,
+  );
+  assert.match(
+    routeSource,
+    /loadPocketAfterMutation\(childApi, pendingPocketMutation, \{ signal \}\)/,
+  );
+  assert.match(toggleSource, /completion:\s*new Promise/);
+  assert.match(toggleSource, /resolveCompletion\(\);/);
 });
 
 test("manifest installs the child app in its own standalone scope", async () => {

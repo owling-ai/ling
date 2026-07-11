@@ -77,4 +77,15 @@ export async function pollMomentUntilSettled(api, id, options = {}) {
   return { id, kind: "personal", status: "timed_out", reason: "poll_timeout", retryable: true };
 }
 
+export async function loadPocketAfterMutation(api, pendingMutation, options = {}) {
+  if (pendingMutation) {
+    try {
+      await pendingMutation;
+    } catch {
+      // A failed collection must not prevent the pocket from loading its settled state.
+    }
+  }
+  return api.pocket(options);
+}
+
 export const childApi = createChildApi();

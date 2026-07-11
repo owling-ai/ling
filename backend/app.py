@@ -443,6 +443,17 @@ def admin_reseed():
 
 # ---------------------------------------------------------------- 前端
 
+
+@app.get("/child", include_in_schema=False)
+def child_index():
+    return FileResponse(os.path.join(FRONTEND, "child", "index.html"))
+
+
+@app.get("/parent", include_in_schema=False)
+def parent_index():
+    return FileResponse(os.path.join(FRONTEND, "parent", "index.html"))
+
+
 app.mount("/demo-media", StaticFiles(directory=DEMO_MEDIA), name="demo-media")
 app.mount("/child", StaticFiles(directory=os.path.join(FRONTEND, "child"), html=True), name="child-app")
 app.mount("/parent", StaticFiles(directory=os.path.join(FRONTEND, "parent"), html=True), name="parent-app")

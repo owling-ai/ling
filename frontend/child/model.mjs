@@ -155,6 +155,15 @@ export function reconcileFeed(feed, result = {}) {
   return withPendingIds({ items: existingItems, pending });
 }
 
+export function pendingCardChanged(previous, current) {
+  if (previous === current) return false;
+  if (!previous || !current) return true;
+  return String(previous.id) !== String(current.id)
+    || previous.kindLabel !== current.kindLabel
+    || previous.title !== current.title
+    || Boolean(previous.pollError) !== Boolean(current.pollError);
+}
+
 export function beginPocketChange(items = [], keepsake = {}, collected) {
   const previous = items.map((item) => ({ ...item }));
   const keepsakeId = idOf(keepsake.id);

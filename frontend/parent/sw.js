@@ -1,4 +1,4 @@
-const CACHE_NAME = "ling-parent-shell-v1";
+const CACHE_NAME = "ling-parent-shell-v2";
 const SHELL = [
   "/parent",
   "/parent/",

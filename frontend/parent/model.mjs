@@ -26,6 +26,21 @@ export const FORBIDDEN_PROJECTION_FIELDS = Object.freeze([
   "diary_id",
   "raw",
   "raw_text",
+  "raw_conversation",
+  "conversation_log",
+  "messages",
+  "message_log",
+  "utterance",
+  "utterances",
+  "child_utterance",
+  "assistant_utterance",
+  "child_message",
+  "assistant_message",
+  "full_text",
+  "audio_url",
+  "video_url",
+  "photo_url",
+  "image_url",
 ]);
 
 function normalizeProjectionField(key) {
@@ -88,6 +103,13 @@ function number(value, fallback = 0) {
 function stringList(value) {
   if (!Array.isArray(value)) return [];
   return value.filter((item) => typeof item === "string").map((item) => item.trim()).filter(Boolean);
+}
+
+function controlledKeepsake(value) {
+  if (value === null || typeof value !== "object") return null;
+  const label = text(value.label || value.name);
+  const description = text(value.description || value.summary);
+  return label || description ? { label, description } : null;
 }
 
 export function todayViewModel(payload = {}) {
@@ -176,8 +198,12 @@ export function memoryViewModel(payload = {}) {
               after: after ? `现在：${after}` : "",
             }
           : null,
+        childChoice: text(item?.child_choice)
+          ? { label: "孩子选择", value: text(item.child_choice) }
+          : null,
+        keepsake: controlledKeepsake(item?.keepsake),
       };
-    }).filter((item) => item.title || item.summary),
+    }).filter((item) => item.title || item.summary || item.childChoice || item.keepsake),
     nextCursor: text(payload.next_cursor) || null,
     redLines,
     redLineExplanation: RED_LINE_EXPLANATION,

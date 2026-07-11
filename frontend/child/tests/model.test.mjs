@@ -210,3 +210,22 @@ test("child media URLs allow only demo media and exact child icons", () => {
     assert.equal(safeMediaUrl(rejected, origin), "", `must reject ${rejected}`);
   }
 });
+
+test("pending cards change only when a visible field changes", () => {
+  const { pendingCardChanged } = model;
+  const pending = momentView({
+    id: 9,
+    kind: "personal",
+    status: "rendering",
+    title: "灵灵正在画下风筝的故事",
+    poll_after_ms: 700,
+  });
+
+  assert.equal(typeof pendingCardChanged, "function");
+  assert.equal(pendingCardChanged(pending, { ...pending }), false);
+  assert.equal(pendingCardChanged(pending, { ...pending, pollAfterMs: 1200 }), false);
+  assert.equal(pendingCardChanged(pending, { ...pending, summary: "不会显示的内部变化" }), false);
+  assert.equal(pendingCardChanged(pending, { ...pending, title: "画面快完成了" }), true);
+  assert.equal(pendingCardChanged(pending, { ...pending, pollError: true }), true);
+  assert.equal(pendingCardChanged(pending, { ...pending, kindLabel: "新的可见标签" }), true);
+});

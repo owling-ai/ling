@@ -6,9 +6,11 @@
   "start_url": "/parent/",
   "scope": "/parent/",
   "display": "standalone",
-  "background_color": "#f5f6f5",
-  "theme_color": "#f5f6f5",
+  "display_override": ["standalone", "minimal-ui"],
+  "background_color": "#f5f1e8",
+  "theme_color": "#f5f1e8",
   "lang": "zh-CN",
+  "categories": ["education", "lifestyle", "parenting"],
   "icons": [
     {
       "src": "/parent/icon-192.png",

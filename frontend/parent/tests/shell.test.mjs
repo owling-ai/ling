@@ -62,6 +62,7 @@ test("service worker activation only removes obsolete parent shell caches", asyn
     cacheNames: [
       "ling-parent-shell-v0",
       "ling-parent-shell-v1",
+      "ling-parent-shell-v2",
       "ling-child-shell-v3",
       "runtime-images",
     ],
@@ -71,7 +72,7 @@ test("service worker activation only removes obsolete parent shell caches", asyn
   listeners.get("activate")({ waitUntil: (promise) => { activation = promise; } });
   await activation;
 
-  assert.deepEqual(state.deleted, ["ling-parent-shell-v0"]);
+  assert.deepEqual(state.deleted, ["ling-parent-shell-v0", "ling-parent-shell-v1"]);
   assert.equal(state.claims, 1);
 });
 
@@ -157,6 +158,16 @@ test("today renderer keeps the mood disclaimer visible in an empty state", async
   assert.match(app, /content\.push\(moodSection\(model\.mood\)\)/);
 });
 
+test("memory renderer shows controlled child choices and keepsakes instead of raw text", async () => {
+  const app = await read("app.mjs");
+
+  assert.match(app, /className: "choice-card"/);
+  assert.match(app, /item\.childChoice/);
+  assert.match(app, /item\.keepsake/);
+  assert.doesNotMatch(app, /childMessage/);
+  assert.doesNotMatch(app, /rawConversation/);
+});
+
 test("12px timeline timestamps meet normal-text contrast", async () => {
   const styles = await read("styles.css");
   const rule = styles.match(/\.timeline time\s*\{([^}]+)\}/)?.[1] || "";
@@ -192,6 +203,32 @@ test("PWA launch URL, manifest scope, and service-worker registration are cohere
   assert.match(app, /serviceWorker\.register\("\/parent\/sw\.js", \{ scope: "\/parent\/" \}\)/);
   assert.match(serviceWorker, /"\/parent"/);
   assert.match(serviceWorker, /"\/parent\/"/);
+});
+
+test("PWA install metadata is mobile first and names the parent manual consistently", async () => {
+  const [html, manifestText] = await Promise.all([
+    read("index.html"),
+    read("manifest.webmanifest"),
+  ]);
+  const manifest = JSON.parse(manifestText);
+
+  assert.match(html, /name="apple-mobile-web-app-title" content="训练师手册"/);
+  assert.match(html, /name="application-name" content="训练师手册"/);
+  assert.match(html, /name="theme-color" media="\(prefers-color-scheme: light\)"/);
+  assert.match(html, /name="theme-color" media="\(prefers-color-scheme: dark\)"/);
+  assert.deepEqual(manifest.display_override, ["standalone", "minimal-ui"]);
+  assert.deepEqual(manifest.categories, ["education", "lifestyle", "parenting"]);
+});
+
+test("visual system keeps the block-and-night-light direction explicit", async () => {
+  const styles = await read("styles.css");
+
+  assert.match(styles, /--block-shadow:/);
+  assert.match(styles, /--lamp-glow:/);
+  assert.match(styles, /body::before/);
+  assert.match(styles, /\.brand-mark::after/);
+  assert.match(styles, /\.tab-list button\[aria-selected="true"\]::before/);
+  assert.match(styles, /touch-action:\s*manipulation/);
 });
 
 test("PWA manifest does not force a device orientation", async () => {

@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as apiModule from "../api.mjs";
 
 import { createChildApi, pollMomentUntilSettled } from "../api.mjs";
 
@@ -92,4 +93,32 @@ test("moment polling times out without fabricating a server failure", async () =
   assert.equal(result.status, "timed_out");
   assert.equal(result.retryable, true);
   assert.deepEqual(updates, ["rendering"]);
+});
+
+test("pocket loading waits for a deferred collection before reading items", async () => {
+  const { loadPocketAfterMutation } = apiModule;
+  let resolvePut;
+  let collected = false;
+  let pocketGets = 0;
+  const deferredPut = new Promise((resolve) => {
+    resolvePut = () => {
+      collected = true;
+      resolve({ collected: true });
+    };
+  });
+  const api = {
+    pocket: async () => {
+      pocketGets += 1;
+      return { items: collected ? [{ id: "kite-token" }] : [] };
+    },
+  };
+
+  assert.equal(typeof loadPocketAfterMutation, "function");
+  const pocketResult = loadPocketAfterMutation(api, deferredPut);
+  await Promise.resolve();
+  assert.equal(pocketGets, 0);
+
+  resolvePut();
+  assert.deepEqual((await pocketResult).items.map((item) => item.id), ["kite-token"]);
+  assert.equal(pocketGets, 1);
 });

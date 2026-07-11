@@ -6,6 +6,7 @@
 """
 import json
 import re
+import time
 from collections import Counter
 
 from . import db, life, llm, memory, prompts
@@ -13,7 +14,65 @@ from . import db, life, llm, memory, prompts
 
 # ---------------------------------------------------------------- 会话后处理
 
+PROCESSING_WAIT_SECONDS = 30.0
+PROCESSING_POLL_SECONDS = 0.02
+
+
+def _claim_or_get_processed(session_id_db: int) -> tuple[str, dict]:
+    with db.transaction(immediate=True) as conn:
+        current = conn.execute(
+            "SELECT * FROM sessions WHERE id=?", (session_id_db,)
+        ).fetchone()
+        if not current:
+            return "missing", {}
+        if current["processed"]:
+            return "processed", db.jloads(current["cold_result_json"], {})
+        if current["processing"]:
+            return "processing", {}
+        conn.execute(
+            "UPDATE sessions SET processing=1,processing_started_at=? "
+            "WHERE id=? AND processed=0 AND processing=0",
+            (db.now(), session_id_db),
+        )
+        return "claimed", dict(current)
+
+
+def _wait_for_processed_session(session_id_db: int) -> dict:
+    deadline = time.monotonic() + PROCESSING_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        row = db.q1(
+            "SELECT processed,cold_result_json FROM sessions WHERE id=?",
+            (session_id_db,),
+        )
+        if not row:
+            return {}
+        if row["processed"]:
+            return db.jloads(row["cold_result_json"], {})
+        time.sleep(PROCESSING_POLL_SECONDS)
+    raise RuntimeError(f"session {session_id_db} is still processing")
+
+
 def process_session(session_id_db: int) -> dict:
+    claim, payload = _claim_or_get_processed(session_id_db)
+    if claim == "missing":
+        return {}
+    if claim == "processed":
+        return payload
+    if claim == "processing":
+        return _wait_for_processed_session(session_id_db)
+
+    try:
+        return _process_session_serialized(session_id_db)
+    except Exception:
+        db.execute(
+            "UPDATE sessions SET processing=0,processing_started_at=NULL "
+            "WHERE id=? AND processed=0",
+            (session_id_db,),
+        )
+        raise
+
+
+def _process_session_serialized(session_id_db: int) -> dict:
     sess = db.q1("SELECT * FROM sessions WHERE id=?", (session_id_db,))
     if not sess or sess["processed"]:
         return db.jloads(sess["cold_result_json"], {}) if sess else {}
@@ -58,19 +117,8 @@ def process_session(session_id_db: int) -> dict:
             return {}
         if current["processed"]:
             return db.jloads(current["cold_result_json"], {})
-        claimed = conn.execute(
-            "UPDATE sessions SET processing=1,processing_started_at=? "
-            "WHERE id=? AND processed=0 AND processing=0",
-            (db.now(), session_id_db),
-        ).rowcount
-        if not claimed:
-            # A visible processing=1 cannot belong to an uncommitted concurrent writer:
-            # BEGIN IMMEDIATE has already serialized us, so it is a stale crash claim.
-            conn.execute(
-                "UPDATE sessions SET processing=1,processing_started_at=? "
-                "WHERE id=? AND processed=0",
-                (db.now(), session_id_db),
-            )
+        if not current["processing"]:
+            raise RuntimeError(f"session {session_id_db} lost processing claim")
 
         diary_id = memory.add_diary(
             child_id, diary["summary"], diary.get("emotions"), diary.get("topics"),

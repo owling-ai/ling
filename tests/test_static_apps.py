@@ -1,0 +1,109 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from urllib.parse import urljoin
+
+import pytest
+from fastapi.testclient import TestClient
+
+from backend import db, engine, experience, llm, media
+
+
+ROOT = Path(__file__).resolve().parents[1]
+FRONTEND_ROOT = ROOT / "frontend"
+FORBIDDEN_SOURCE_PATHS = (
+    "/api/facts",
+    "/api/diary",
+    "/api/mastery",
+    "/api/report",
+    "/api/state",
+    "/api/admin",
+    "/api/volcengine",
+)
+
+
+@pytest.fixture
+def client(isolated_db: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(llm, "worker_live", lambda: False)
+    engine.SESSIONS.clear()
+    experience._DEFAULT_SERVICE = None
+    from backend.app import app
+
+    with TestClient(app, follow_redirects=False) as test_client:
+        yield test_client
+    engine.SESSIONS.clear()
+    experience._DEFAULT_SERVICE = None
+
+
+def assert_content_type(response, expected_prefix: str) -> None:
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(expected_prefix)
+
+
+def test_child_and_parent_entrypoints_return_html_without_redirect(client: TestClient) -> None:
+    assert_content_type(client.get("/child"), "text/html")
+    assert_content_type(client.get("/parent"), "text/html")
+
+
+def test_pwa_manifests_service_workers_and_icons_are_served(client: TestClient) -> None:
+    for app_name in ("child", "parent"):
+        manifest_response = client.get(f"/{app_name}/manifest.webmanifest")
+        assert_content_type(manifest_response, "application/manifest+json")
+        manifest = manifest_response.json()
+        assert manifest["display"] == "standalone"
+        assert manifest["start_url"].rstrip("/") == f"/{app_name}"
+
+        sw_response = client.get(f"/{app_name}/sw.js")
+        assert_content_type(sw_response, "text/javascript")
+        assert "/api/" in sw_response.text
+
+        for icon in manifest["icons"]:
+            icon_url = urljoin(f"/{app_name}/", icon["src"])
+            icon_response = client.get(icon_url)
+            assert_content_type(icon_response, "image/png")
+
+
+def test_manifest_media_urls_exist_without_network(client: TestClient) -> None:
+    catalog = media.default_catalog(reload=True)
+    media_urls = {
+        f'/demo-media/{asset["src"]}'
+        for asset in catalog.assets
+    } | {
+        f'/demo-media/{asset["poster"]}'
+        for asset in catalog.assets
+    }
+
+    assert media_urls
+    for url in sorted(media_urls):
+        response = client.get(url)
+        assert response.status_code == 200, url
+        assert response.headers["content-type"].startswith(("video/", "image/"))
+
+
+def test_mobile_app_source_does_not_request_legacy_or_admin_apis() -> None:
+    source_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for app_dir in (FRONTEND_ROOT / "child", FRONTEND_ROOT / "parent")
+        for path in app_dir.glob("*.mjs")
+    )
+    for forbidden in FORBIDDEN_SOURCE_PATHS:
+        assert forbidden not in source_text
+
+
+def test_parent_projection_guard_has_all_forbidden_internal_fields() -> None:
+    model_source = (FRONTEND_ROOT / "parent" / "model.mjs").read_text(encoding="utf-8")
+    for forbidden in (
+        "transcript",
+        "quote",
+        "session_id",
+        "prompt",
+        "provider",
+        "job",
+        "successes",
+        "exposures",
+        "due_date",
+        "private_canon",
+        "delete_url",
+    ):
+        assert json.dumps(forbidden) in model_source

@@ -159,6 +159,20 @@ def test_parent_memory_uses_projection_ids_and_has_no_deletion_targets(
     projection_service,
 ) -> None:
     service, clock, _, _ = projection_service
+    db.execute(
+        "INSERT INTO diary_entries("
+        "child_id,ts,summary,emotions_json,topics_json,quotes_json,open_loop"
+        ") VALUES(?,?,?,?,?,?,?)",
+        (
+            1,
+            "2026-07-11T11:00:00+08:00",
+            "悠悠和玩偶聊了学校，说了3句话。TA说：「我今天不想说英语」",
+            '["平静"]',
+            '["学校"]',
+            '["我今天不想说英语"]',
+            "",
+        ),
+    )
     memory = service.parent_memory(1, limit=20, now=clock[0])
     assert set(memory) == {"items", "next_cursor", "boundary_summary", "rights"}
     assert all(str(item["id"]).startswith(("moment:", "attention:", "growth:")) for item in memory["items"])
@@ -173,6 +187,10 @@ def test_parent_memory_uses_projection_ids_and_has_no_deletion_targets(
         "status_note": "黑客松版本仅展示数据权利说明，不执行导出或注销。",
     }
     assert not (_keys(memory) & PARENT_FORBIDDEN)
+    summaries = " ".join(item.get("summary", "") for item in memory["items"])
+    assert "TA说" not in summaries
+    assert "「" not in summaries
+    assert "」" not in summaries
 
 
 def test_parent_guardian_is_read_only_and_ai_identity_is_fixed(

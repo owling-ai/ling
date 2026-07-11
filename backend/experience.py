@@ -480,9 +480,9 @@ class ExperienceService:
             "INSERT INTO pocket_entries(child_id,keepsake_id,collected,collected_at,updated_at) "
             "VALUES(?,?,?,?,?) ON CONFLICT(child_id,keepsake_id) DO UPDATE SET "
             "collected=excluded.collected,"
-            "collected_at=CASE WHEN pocket_entries.collected=1 AND excluded.collected=1 "
+            "collected_at=CASE WHEN pocket_entries.collected=excluded.collected "
             "THEN pocket_entries.collected_at ELSE excluded.collected_at END,"
-            "updated_at=CASE WHEN pocket_entries.collected=1 AND excluded.collected=1 "
+            "updated_at=CASE WHEN pocket_entries.collected=excluded.collected "
             "THEN pocket_entries.updated_at ELSE excluded.updated_at END",
             (child_id, keepsake_id, 1 if collected else 0, collected_at, now),
         )
