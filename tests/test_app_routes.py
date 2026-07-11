@@ -11,6 +11,9 @@ from backend import db, engine, experience, llm, memory, seed
 @pytest.fixture
 def client(isolated_db: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(llm, "worker_live", lambda: False)
+    monkeypatch.setenv("LING_MEDIA_PROVIDER", "mock")
+    monkeypatch.delenv("LING_ARK_VIDEO_API_KEY", raising=False)
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
     engine.SESSIONS.clear()
     experience._DEFAULT_SERVICE = None
     from backend.app import app
@@ -62,6 +65,50 @@ def test_admin_demo_moment_and_polling_route(client: TestClient) -> None:
     assert polled.status_code == 200
     assert polled.json()["status"] in {"rendering", "published"}
     assert client.get("/api/moments/999999").status_code == 404
+
+
+def test_media_admin_routes_and_generated_media_are_served(
+    client: TestClient,
+) -> None:
+    created = client.post(
+        "/api/admin/demo-moment",
+        json={
+            "event_key": "canon_choice",
+            "event_value": "橡果味",
+            "source_id": "media-admin-route-demo",
+        },
+    )
+    assert created.status_code == 200
+
+    jobs = client.get("/api/admin/media/jobs?limit=10")
+    assert jobs.status_code == 200
+    payload = jobs.json()
+    assert payload["provider"] == "mock"
+    assert payload["requested_provider"] == "mock"
+    assert payload["api_key_configured"] is False
+    assert payload["degraded"] is False
+    assert payload["degraded_reason"] is None
+    assert payload["worker_running"] is False
+    assert any(
+        job["id"] == created.json()["job_id"] and job["provider"] == "mock"
+        for job in payload["jobs"]
+    )
+
+    tick = client.post("/api/admin/media/tick")
+    assert tick.status_code == 200
+    assert tick.json()["provider"] == "mock"
+
+    from backend import app as app_module
+
+    generated = Path(app_module.GENERATED_MEDIA) / "route-test-generated.mp4"
+    generated.write_bytes(b"\x00\x00\x00\x18ftypmp42route-test")
+    try:
+        response = client.get(f"/generated-media/{generated.name}")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("video/mp4")
+        assert response.content == generated.read_bytes()
+    finally:
+        generated.unlink(missing_ok=True)
 
 
 def test_pocket_route_is_idempotent(client: TestClient) -> None:

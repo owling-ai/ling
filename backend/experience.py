@@ -74,11 +74,24 @@ class ExperienceService:
         self.now_fn = now_fn or (lambda: datetime.now(dt_timezone.utc))
         self.timezone = timezone
         self.zone = ZoneInfo(timezone)
-        self.provider = provider or media.MockMediaProvider(
-            self.catalog,
-            now_fn=self.now_fn,
-            delay_seconds=generation_delay_seconds,
-        )
+        if provider is None:
+            from . import jimeng_video
+
+            provider = jimeng_video.configured_provider(
+                self.catalog,
+                now_fn=self.now_fn,
+                generation_delay_seconds=generation_delay_seconds,
+            )
+        self.provider = provider
+        self._providers: dict[str, media.GenerationProvider] = {
+            provider.name: provider,
+        }
+        if provider.name != "mock":
+            self._providers["mock"] = media.MockMediaProvider(
+                self.catalog,
+                now_fn=self.now_fn,
+                delay_seconds=generation_delay_seconds,
+            )
 
     def now(self) -> datetime:
         return _aware(self.now_fn()).astimezone(self.zone)
@@ -219,7 +232,21 @@ class ExperienceService:
             (moment_id,),
         )
 
-    def _start_retry(self, moment: dict, failed_job: dict) -> dict:
+    def _provider_for_job(self, job: dict) -> media.GenerationProvider:
+        provider = self._providers.get(job["provider"])
+        if provider is None:
+            raise RuntimeError(
+                f'generation provider {job["provider"]!r} is not configured'
+            )
+        return provider
+
+    def _start_retry(
+        self,
+        moment: dict,
+        failed_job: dict,
+        provider: media.GenerationProvider | None = None,
+    ) -> dict:
+        provider = provider or self._provider_for_job(failed_job)
         next_attempt = failed_job["attempt"] + 1
         with db.transaction(immediate=True) as conn:
             bound = conn.execute(
@@ -234,7 +261,7 @@ class ExperienceService:
                 return dict(latest)
             if latest["id"] != bound["id"] or latest["attempt"] >= next_attempt:
                 return dict(latest)
-            job_id = self.provider.submit(
+            job_id = provider.submit(
                 {
                     "moment_id": moment["id"],
                     "attempt": next_attempt,
@@ -265,7 +292,11 @@ class ExperienceService:
         )
 
     def _resolve_polled_job(
-        self, moment_id: int, job_id: int, asset: dict | None = None
+        self,
+        moment_id: int,
+        job_id: int,
+        asset: dict | None = None,
+        provider: media.GenerationProvider | None = None,
     ) -> dict:
         with db.transaction(immediate=True) as conn:
             moment_row = conn.execute(
@@ -286,6 +317,7 @@ class ExperienceService:
                     f"generation job not found for moment: {moment_id}"
                 )
             bound = dict(bound_row)
+            provider = provider or self._provider_for_job(bound)
             latest = dict(
                 conn.execute(
                     "SELECT * FROM generation_jobs WHERE moment_id=? "
@@ -303,7 +335,7 @@ class ExperienceService:
             if bound["status"] == "failed":
                 if bound["attempt"] < MAX_GENERATION_ATTEMPTS:
                     next_attempt = bound["attempt"] + 1
-                    retry_id = self.provider.submit(
+                    retry_id = provider.submit(
                         {
                             "moment_id": moment_id,
                             "attempt": next_attempt,
@@ -345,9 +377,9 @@ class ExperienceService:
             if bound["status"] != "succeeded":
                 return {"action": "rendering", "attempt": bound["attempt"]}
 
-            asset = asset or self.provider.result(bound["id"])
+            asset = asset or provider.result(bound["id"])
             published_at = _iso(self.now())
-            snapshot_json = self._snapshot_json(asset, provider=self.provider.name)
+            snapshot_json = self._snapshot_json(asset, provider=provider.name)
             updated = conn.execute(
                 "UPDATE moments SET status='published',published_asset_id=?,"
                 "published_asset_json=?,published_at=?,error_code='' "
@@ -392,14 +424,17 @@ class ExperienceService:
         job = self._latest_job(moment_id)
         if not job:
             raise ExperienceNotFound(f"generation job not found for moment: {moment_id}")
+        provider = self._provider_for_job(job)
         asset = None
         try:
-            status = self.provider.poll(job["id"])
+            status = provider.poll(job["id"])
             if status == "succeeded":
-                asset = self.provider.result(job["id"])
+                asset = provider.result(job["id"])
         except media.MediaError as exc:
             self._mark_job_failed_from_media_error(job["id"], exc)
-        resolution = self._resolve_polled_job(moment_id, job["id"], asset)
+        resolution = self._resolve_polled_job(
+            moment_id, job["id"], asset, provider=provider
+        )
         if resolution["action"] == "rendering":
             return {
                 "id": moment_id,
@@ -433,7 +468,9 @@ class ExperienceService:
         if isinstance(snapshot, dict) and isinstance(snapshot.get("media"), dict):
             return snapshot
         asset = self.catalog.asset(moment["published_asset_id"])
-        snapshot = media.asset_snapshot(asset, provider=self.provider.name)
+        job = self._latest_job(moment["id"])
+        provider_name = job["provider"] if job else "mock"
+        snapshot = media.asset_snapshot(asset, provider=provider_name)
         snapshot_json = json.dumps(
             snapshot, ensure_ascii=False, separators=(",", ":")
         )
@@ -457,7 +494,9 @@ class ExperienceService:
                 asset = self.catalog.asset(row["published_asset_id"])
             except media.MediaError:
                 continue
-            snapshot_json = self._snapshot_json(asset, provider=self.provider.name)
+            job = self._latest_job(row["id"])
+            provider_name = job["provider"] if job else "mock"
+            snapshot_json = self._snapshot_json(asset, provider=provider_name)
             db.execute(
                 "UPDATE moments SET published_asset_json=? WHERE id=? "
                 "AND (published_asset_json IS NULL OR published_asset_json='')",

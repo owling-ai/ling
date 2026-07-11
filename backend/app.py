@@ -18,7 +18,21 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from . import db, engine, experience, life, llm, media, memory, realtime, seed, volcengine_rtc, workers  # noqa: E402
+from . import (  # noqa: E402
+    db,
+    engine,
+    experience,
+    jimeng_video,
+    life,
+    llm,
+    media,
+    media_worker,
+    memory,
+    realtime,
+    seed,
+    volcengine_rtc,
+    workers,
+)
 
 app = FastAPI(title="灵 · 共同成长玩偶记忆服务")
 
@@ -155,6 +169,8 @@ CHILD_ID = db.CHILD_ID
 FRONTEND = os.path.join(os.path.dirname(__file__), "..", "frontend")
 DESIGN = os.path.join(os.path.dirname(__file__), "..", "design")
 DEMO_MEDIA = os.path.join(os.path.dirname(__file__), "demo_media")
+GENERATED_MEDIA = str(jimeng_video.generated_media_root())
+os.makedirs(GENERATED_MEDIA, exist_ok=True)
 
 
 @app.on_event("startup")
@@ -166,15 +182,30 @@ def startup():
         seed.seed()
     seed.ensure_experience_seeded()
     experience_service.backfill_published_asset_snapshots()
+    media_worker.start_default(experience_service)
+    media_mode = jimeng_video.provider_mode_info()
     info = llm.mode_info()
     rt = realtime.info()
     live = ", ".join(
         f"{name}={'on' if config['available'] else 'off'}"
         for name, config in rt["providers"].items()
     )
-    print(f"[realtime] 实时语音：{live} · default={rt['default_provider']}\n"
-          f"[llm] 冷路径（记忆工人）：{info['worker_provider']} · {info['worker_model']}",
-          flush=True)
+    degraded = (
+        f" · degraded={media_mode['degraded_reason']}"
+        if media_mode["degraded"]
+        else ""
+    )
+    print(
+        f"[realtime] 实时语音：{live} · default={rt['default_provider']}\n"
+        f"[llm] 冷路径（记忆工人）：{info['worker_provider']} · {info['worker_model']}\n"
+        f"[media] 视频生成：{experience_service.provider.name}{degraded}",
+        flush=True,
+    )
+
+
+@app.on_event("shutdown")
+def shutdown():
+    media_worker.stop_default()
 
 
 # ---------------------------------------------------------------- 基本状态
@@ -558,6 +589,29 @@ def admin_demo_moment(body: DemoMomentBody):
     )
 
 
+@app.get("/api/admin/media/jobs")
+def admin_media_jobs(limit: int = Query(default=50, ge=1, le=200)):
+    service = experience.default_service()
+    worker = media_worker.default_worker()
+    mode = jimeng_video.provider_mode_info()
+    return {
+        "provider": service.provider.name,
+        "requested_provider": mode["requested_provider"],
+        "api_key_configured": mode["api_key_configured"],
+        "degraded": mode["degraded"],
+        "degraded_reason": mode["degraded_reason"],
+        "worker_running": bool(worker and worker.is_running),
+        "jobs": media_worker.job_summaries(limit),
+    }
+
+
+@app.post("/api/admin/media/tick")
+def admin_media_tick():
+    service = experience.default_service()
+    worker = media_worker.default_worker() or media_worker.MediaGenerationWorker(service)
+    return worker.run_once()
+
+
 @app.post("/api/admin/reseed")
 def admin_reseed():
     return seed.seed()
@@ -567,6 +621,11 @@ def admin_reseed():
 
 
 app.mount("/demo-media", StaticFiles(directory=DEMO_MEDIA), name="demo-media")
+app.mount(
+    "/generated-media",
+    StaticFiles(directory=GENERATED_MEDIA),
+    name="generated-media",
+)
 app.mount("/child", StaticFiles(directory=os.path.join(FRONTEND, "child"), html=True), name="child-app")
 app.mount("/parent", StaticFiles(directory=os.path.join(FRONTEND, "parent"), html=True), name="parent-app")
 app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND, "assets")), name="assets")

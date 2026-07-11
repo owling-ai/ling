@@ -21,7 +21,7 @@
 - `http://localhost:8888/parent/`：家长端「训练师手册」，手机优先 PWA，只读取受控家长投影。
 - `http://localhost:8888/design`：积木 + 夜灯的配色与组件参考；其中旧版卡片式页面结构已被产品文档中的全屏世界线规范取代。
 
-本轮黑客松不现场调用 Seedance/Veo。后端用 `MockMediaProvider` 模拟“提交生成 -> 渲染中 -> 发布”的状态机，实际展示读取 `backend/demo_media/` 下预生成的本地 MP4/PNG。彩排时可触发一个专属瞬间：
+黑客松现场不依赖 Seedance/Veo。默认用 `MockMediaProvider` 模拟“提交生成 -> 渲染中 -> 发布”的状态机，实际展示读取 `backend/demo_media/` 下预生成的本地 MP4/PNG。后端也已提供可选的即梦 / 火山方舟 Seedance 2.0 异步 provider，用于离线准备素材或加分演示；配置、轮询、下载和发布契约见 [视频生成链路](./docs/media-generation.md)。彩排时可触发一个专属瞬间：
 
 ```bash
 curl -X POST http://localhost:8888/api/admin/demo-moment \
@@ -42,7 +42,7 @@ node --test frontend/parent/tests/*.test.mjs
 .venv/bin/python -m compileall -q backend tests
 ```
 
-明确延期到生产阶段的事项：真实 Seedance/Veo 接入、队列/对象存储/CMS、生产 ACL、多孩多账号、通知投递、完整账户注销销毁流程，以及家长端写入型设置。
+明确延期到生产阶段的事项：TOS 对象存储/CMS、多实例任务协调、生产 ACL、多孩多账号、通知投递、完整账户注销销毁流程，以及家长端写入型设置。当前 Seedance 接入使用 SQLite 可恢复任务与本地持久卷，足够支持单实例 Demo 和离线素材准备。
 
 ## 当前产品设计与开发进展
 

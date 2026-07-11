@@ -223,6 +223,19 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
     ready_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     error_code TEXT DEFAULT '',
+    external_task_id TEXT,
+    request_json TEXT NOT NULL DEFAULT '{}',
+    provider_response_json TEXT NOT NULL DEFAULT '{}',
+    next_poll_at TEXT,
+    provider_failures INTEGER NOT NULL DEFAULT 0,
+    media_path TEXT,
+    poster_path TEXT,
+    media_sha256 TEXT,
+    poster_sha256 TEXT,
+    width INTEGER,
+    height INTEGER,
+    duration_ms INTEGER,
+    completed_at TEXT,
     UNIQUE(moment_id, attempt)
 );
 
@@ -268,6 +281,39 @@ def init_db():
     }
     if "published_asset_json" not in moment_columns:
         conn.execute("ALTER TABLE moments ADD COLUMN published_asset_json TEXT")
+    generation_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(generation_jobs)").fetchall()
+    }
+    generation_migrations = {
+        "external_task_id": "TEXT",
+        "request_json": "TEXT NOT NULL DEFAULT '{}'",
+        "provider_response_json": "TEXT NOT NULL DEFAULT '{}'",
+        "next_poll_at": "TEXT",
+        "provider_failures": "INTEGER NOT NULL DEFAULT 0",
+        "media_path": "TEXT",
+        "poster_path": "TEXT",
+        "media_sha256": "TEXT",
+        "poster_sha256": "TEXT",
+        "width": "INTEGER",
+        "height": "INTEGER",
+        "duration_ms": "INTEGER",
+        "completed_at": "TEXT",
+    }
+    for name, declaration in generation_migrations.items():
+        if name not in generation_columns:
+            conn.execute(
+                f"ALTER TABLE generation_jobs ADD COLUMN {name} {declaration}"
+            )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_generation_jobs_provider_due "
+        "ON generation_jobs(provider, status, next_poll_at)"
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_generation_jobs_external_task "
+        "ON generation_jobs(provider, external_task_id) "
+        "WHERE external_task_id IS NOT NULL"
+    )
     canon_columns = {
         row["name"] for row in conn.execute("PRAGMA table_info(doll_canon)").fetchall()
     }
