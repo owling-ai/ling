@@ -401,3 +401,32 @@ def test_realtime_info_publishes_one_gemini_entry_without_upstream_ids(
     assert info["providers"]["gemini"]["voice_profile"] == info[
         "default_voice_profile"
     ]
+
+
+def test_child_pcm_frames_align_to_100ms_even_samples() -> None:
+    pcm = bytes(range(256)) * 60  # 15,360 bytes
+    frames = realtime._child_pcm_frames(pcm)
+
+    assert b"".join(frames) == pcm
+    assert all(len(frame) == 4800 for frame in frames[:-1])
+    assert all(len(frame) % 2 == 0 for frame in frames)  # 偶数样本边界
+    # 100ms @ 24kHz mono PCM16
+    assert realtime.CHILD_PCM_FRAME_BYTES == 24000 * 2 // 10
+
+
+def test_child_pcm_frames_empty_input() -> None:
+    assert realtime._child_pcm_frames(b"") == []
+    assert realtime._child_pcm_frames(None) == []
+
+
+def test_child_pcm_frame_json_stays_under_16kib() -> None:
+    import base64 as _b64
+
+    frame = bytes(realtime.CHILD_PCM_FRAME_BYTES)
+    payload = json.dumps(
+        {
+            "type": "response.audio.delta",
+            "delta": _b64.b64encode(frame).decode("ascii"),
+        }
+    )
+    assert len(payload.encode()) < 16 * 1024

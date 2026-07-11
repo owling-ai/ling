@@ -12,6 +12,7 @@ import math
 import os
 import re
 import sys
+import time
 import uuid
 from array import array
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -778,6 +779,28 @@ async def _send_gemini_audio_delta(client, delta: str) -> None:
         await _send_json(client, {"type": "response.audio.delta", "delta": chunk})
 
 
+# ESP32 童声下行按 100ms 小帧近实时配速发送。整段 TTS 按近 64 KiB 大帧
+# 背靠背连发会压垮设备的 WS 接收/Base64 解码/播放路径（实测板上
+# transport_poll_write 超时、后续 WS RX 停摆）。
+CHILD_PCM_FRAME_BYTES = 4800  # 100ms @ 24kHz mono PCM16，天然偶数样本边界
+CHILD_PCM_PREBUFFER_FRAMES = 3  # 前几帧立即发，填设备预缓冲
+CHILD_PCM_FRAME_INTERVAL_S = float(
+    os.environ.get("LING_CHILD_PCM_FRAME_INTERVAL_S", "0.09")
+)  # 略快于实时（100ms/帧），防设备播放断流
+CHILD_PCM_DONE_GRACE_S = float(
+    os.environ.get("LING_CHILD_PCM_DONE_GRACE_S", "0.4")
+)  # 最后一帧之后再发 response.done，给设备排空播放队列的时间
+
+
+def _child_pcm_frames(pcm: bytes) -> list[bytes]:
+    if not pcm:
+        return []
+    return [
+        pcm[index : index + CHILD_PCM_FRAME_BYTES]
+        for index in range(0, len(pcm), CHILD_PCM_FRAME_BYTES)
+    ]
+
+
 async def _open_gemini(
     session_id: str,
     pack: dict,
@@ -889,7 +912,7 @@ async def _bridge_gemini(client, session_id: str, pack: dict):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            _log(f"设备实时连接结束：{type(exc).__name__}")
+            _log(f"设备实时连接结束：{type(exc).__name__}: {exc}")
         finally:
             client_closed.set()
 
@@ -1489,6 +1512,7 @@ async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
     vad_threshold = max(
         100, int(os.environ.get("LING_GEMINI_PCM_VAD_THRESHOLD", "500"))
     )
+    last_audio_monotonic = time.monotonic()
 
     async def finish_response(token: dict) -> None:
         nonlocal current_response
@@ -1528,7 +1552,7 @@ async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
         return math.sqrt(sum(sample * sample for sample in samples) / len(samples))
 
     async def read_client() -> None:
-        nonlocal speech_active
+        nonlocal speech_active, last_audio_monotonic
         try:
             while True:
                 raw = await client.receive_text()
@@ -1551,6 +1575,7 @@ async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
                         )
                         await cancel_response()
                     await asr.send_audio(pcm)
+                    last_audio_monotonic = time.monotonic()
                 elif event_type == "response.cancel":
                     await cancel_response()
                 elif event_type == "ling.idle_nudge":
@@ -1579,7 +1604,7 @@ async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
                         )
                         await queue_response()
         except Exception as exc:
-            _log(f"设备实时连接结束：{type(exc).__name__}")
+            _log(f"设备实时连接结束：{type(exc).__name__}: {exc}")
         finally:
             client_closed.set()
 
@@ -1660,13 +1685,24 @@ async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
             pcm = await asyncio.to_thread(child_tts.synthesize_pcm, reply)
             if token["cancelled"] or client_closed.is_set():
                 return
-            encoded = base64.b64encode(pcm).decode("ascii")
-            for chunk in _gemini_audio_delta_chunks(encoded):
+            frames = _child_pcm_frames(pcm)
+            for index, frame in enumerate(frames):
                 if token["cancelled"] or client_closed.is_set():
                     return
                 await _send_json(
-                    client, {"type": "response.audio.delta", "delta": chunk}
+                    client,
+                    {
+                        "type": "response.audio.delta",
+                        "delta": base64.b64encode(frame).decode("ascii"),
+                    },
                 )
+                # 预缓冲帧之后、最后一帧之前，按近实时节奏发送
+                if CHILD_PCM_PREBUFFER_FRAMES <= index + 1 < len(frames):
+                    await asyncio.sleep(CHILD_PCM_FRAME_INTERVAL_S)
+            if frames:
+                await asyncio.sleep(CHILD_PCM_DONE_GRACE_S)
+                if token["cancelled"] or client_closed.is_set():
+                    return
 
             state = engine.record_voice_doll(session_id, reply)
             await finish_response(token)
@@ -1701,6 +1737,18 @@ async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
             request = await request_queue.get()
             await respond(request)
 
+    async def asr_keepalive() -> None:
+        # 火山流式 ASR 超过 8s 收不到音频包就杀会话（error 45000081），而
+        # 设备在 AI 说话/播放期间不上传麦克风（回声防护）。上行静默超过
+        # 4s 就补一帧静音保活。
+        nonlocal last_audio_monotonic
+        silence = bytes(3200)  # 100ms @ 16kHz mono PCM16
+        while True:
+            await asyncio.sleep(2.0)
+            if time.monotonic() - last_audio_monotonic >= 4.0:
+                await asr.send_audio(silence)
+                last_audio_monotonic = time.monotonic()
+
     try:
         await _send_json(client, {"type": "session.created", "provider": "gemini"})
         if not engine.get_session_history(session_id) and engine.claim_opening(session_id):
@@ -1715,7 +1763,8 @@ async def _bridge_gemini_child_pcm(client, session_id: str, pack: dict) -> None:
         reader_task = asyncio.create_task(read_client())
         asr_task = asyncio.create_task(receive_asr())
         response_task = asyncio.create_task(process_responses())
-        tasks = {reader_task, asr_task, response_task}
+        keepalive_task = asyncio.create_task(asr_keepalive())
+        tasks = {reader_task, asr_task, response_task, keepalive_task}
         done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             if not task.cancelled() and task.exception() is not None:
