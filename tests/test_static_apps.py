@@ -225,6 +225,7 @@ def test_remote_debug_and_admin_apis_require_a_token(
             (remote.get, "/api/state"),
             (remote.post, "/api/session/start"),
             (remote.post, "/api/session/end"),
+            (remote.post, "/api/gemini/prepare"),
             (remote.post, "/api/volcengine/prepare"),
             (remote.post, "/api/admin/reseed"),
         ):
@@ -301,9 +302,11 @@ def test_legacy_console_selects_and_previews_child_voice_profiles() -> None:
 
     assert 'localStorage.getItem("ling-child-voice-profile")' in source
     assert 'voice_profile: selectedVoiceProfile' in source
+    assert 'api.post("/gemini/prepare"' in source
+    assert 'api.post("/volcengine/' not in source
     assert "new Audio(profile.preview_url)" in source
     assert 'input[name="child-voice-profile"]' in source
-    assert 'panel.hidden = selectedProvider !== "volcengine"' in source
+    assert 'panel.hidden = selectedConfig().transport !== "bytedrtc"' in source
     assert '.filter(name => providers[name])' in source
 
 

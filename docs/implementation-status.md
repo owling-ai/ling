@@ -5,8 +5,8 @@
 ## 已实现
 
 - 一个 FastAPI 服务提供旧玩偶调试台、孩子端 App PWA、家长端 App PWA 与 JSON API。调试台不是独立产品端。
-- Gemini Live、StepFun、MiniCPM-o 经 `/api/realtime/ws` 代理；Gemini 童声与火山 Ark 使用 ByteRTC 和独立控制面 API。
-- Gemini 童声通过鉴权 SSE 回调使用 Gemini 文本模型，并提供“小晴天 / 小青芽”两档 `seed-tts-2.0` 白名单、实际 RTC 试听和非法 ID 回退。
+- StepFun、MiniCPM-o 经 `/api/realtime/ws` 代理；Gemini 童声与火山 Ark 使用 ByteRTC 和独立控制面 API。Gemini Live 原声音频已禁用。
+- Gemini 童声通过鉴权 SSE 回调使用 Gemini 文本模型；产品 API 使用 `/api/gemini/*`，内部由 ByteRTC 承载，并提供“小晴天 / 小青芽”两档 `seed-tts-2.0` 白名单、实际 RTC 试听和非法 ID 回退。
 - L1-L4、会话转写、事实演化、SRS、议程、私有 Canon、故事弧与成长快照落 SQLite。
 - 会话结束幂等处理冷路径，并可创建最多两次 attempt 的专属瞬间生成任务。
 - 基础世界由 `base_world.json` 驱动；视频变体分配持久化到 `world_assignments`。
@@ -32,7 +32,7 @@
 | 设备协议 | App 二维码绑定已实现；没有 `/api/device/v1/*` 或硬件身份证明 | 设备协议仍仅有提案 |
 | 多实例 | 会话锁与媒体 worker 以单进程为主，SQLite 持久化；实时恢复依赖单实例连接状态 | 不支持生产多实例 |
 | 通知 | 只有投影文案 | 未投递 |
-| 视觉动作主动门控 | Gemini Live、Gemini 童声、StepFun、火山支持有限冷场触发；MiniCPM 不支持后台文本触发 | 独立动作门控未实现 |
+| 视觉动作主动门控 | Gemini 童声、StepFun、火山支持有限冷场触发；MiniCPM 不支持后台文本触发 | 独立动作门控未实现 |
 | 议程消费 | 会话开始即标记 `consumed` | 与“真实使用后消费”目标不一致 |
 
 ## 文档修正依据

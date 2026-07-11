@@ -177,7 +177,8 @@ VOICE_NOTE = """
 
 def provider_available(provider: str) -> bool:
     if provider == "gemini":
-        return bool(os.environ.get("GEMINI_API_KEY"))
+        # Product Gemini is the child-voice RTC pipeline. Native Live audio is disabled.
+        return False
     if provider == "stepfun":
         return bool(os.environ.get("STEPFUN_API_KEY"))
     if provider == "volcengine":
@@ -215,7 +216,7 @@ def default_provider() -> str:
         return "volcengine"
     if provider_available("minicpm"):
         return "minicpm"
-    return configured if configured in PROVIDER_INFO else "gemini"
+    return configured if configured in {"stepfun", "volcengine", "minicpm"} else "volcengine"
 
 
 def available(provider: str | None = None) -> bool:
@@ -237,12 +238,16 @@ def info() -> dict:
         }
         for name, config in PROVIDER_INFO.items()
     }
+    providers.pop("gemini", None)
+    selected = default_provider()
     if hybrid_gemini_available():
-        providers.pop("gemini", None)
-        providers["volcengine"].update(
+        child_gemini = providers.pop("volcengine")
+        child_gemini.update(
             {"label": "Gemini", "short_label": "Gemini", "llm_provider": "gemini"}
         )
-    selected = default_provider()
+        providers["gemini"] = child_gemini
+        if selected == "volcengine":
+            selected = "gemini"
     current = providers[selected]
     return {
         "available": available(),
@@ -1472,6 +1477,19 @@ async def bridge(
         await _send_json(client, {"type": "ling.error", "message": "不支持的实时模型"})
         await client.close()
         return
+    if provider == "gemini":
+        await _send_json(
+            client,
+            {
+                "type": "ling.error",
+                "code": "rtc_transport_required",
+                "message": "Gemini 只使用童声 RTC；当前 PCM WebSocket 需要迁移到 ByteRTC 或 Device Gateway",
+                "provider": "gemini",
+                "retryable": False,
+            },
+        )
+        await client.close()
+        return
     if not provider_available(provider):
         env_name = {
             "gemini": "GEMINI_API_KEY",
@@ -1494,9 +1512,7 @@ async def bridge(
     try:
         if provider == "volcengine":
             raise RuntimeError("Volcengine uses the ByteRTC REST control plane")
-        if provider == "gemini":
-            await _bridge_gemini(client, session_id, session["pack"])
-        elif provider == "minicpm":
+        if provider == "minicpm":
             await _bridge_minicpm(client, session_id, session["pack"], video)
         else:
             await _bridge_stepfun(client, session_id, session["pack"])

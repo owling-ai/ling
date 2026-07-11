@@ -3,6 +3,7 @@
 ## 2026-07-11
 
 - 将 Gemini 童声收敛为调试台唯一的 Gemini 入口；RTC/硬件客户端省略音色参数时由服务端默认使用“小晴天”。
+- 禁用 Gemini Live 原声音频路由；旧 PCM WebSocket 传 `provider=gemini` 时返回 `rtc_transport_required`，不再输出成人声。
 - 修复 ESP32 复用 `session_id` 重连后的 Gemini 上下文丢失：持久化业务会话、resumption handle 和文本历史，重连不再重复 opening。
 - Gemini 上游连接失败改为设备 WebSocket 内退避重试，并补充 `response.cancel` 本地收尾、音频帧上限和泵任务清理。
 - 加入孩子端先扫、家长端后扫同一二维码的黑客松绑定闭环，并区分 App Demo 绑定与生产账户、硬件鉴权。

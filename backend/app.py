@@ -67,6 +67,7 @@ _PROTECTED_API_PREFIXES = (
     "/api/admin/",
     "/api/facts/",
     "/api/session/",
+    "/api/gemini/",
     "/api/volcengine/",
     "/api/realtime/",
 )
@@ -439,6 +440,7 @@ def volcengine_gemini_callback(request: Request, body: dict):
     )
 
 
+@app.post("/api/gemini/prepare")
 @app.post("/api/volcengine/prepare")
 def volcengine_prepare(body: VolcPrepareBody):
     """Issue a short-lived ByteRTC token after the user clicks Connect."""
@@ -450,6 +452,7 @@ def volcengine_prepare(body: VolcPrepareBody):
         raise HTTPException(503, str(exc)) from exc
 
 
+@app.post("/api/gemini/start")
 @app.post("/api/volcengine/start")
 def volcengine_start(body: VolcSessionBody):
     """Start the AI after the browser has joined and published audio."""
@@ -461,6 +464,7 @@ def volcengine_start(body: VolcSessionBody):
         raise HTTPException(502, str(exc)) from exc
 
 
+@app.post("/api/gemini/observe")
 @app.post("/api/volcengine/observe")
 def volcengine_observe(body: VolcSessionBody):
     """Use one idle budget to inspect cached video without interrupting."""
@@ -472,6 +476,7 @@ def volcengine_observe(body: VolcSessionBody):
         raise HTTPException(502, str(exc)) from exc
 
 
+@app.post("/api/gemini/subtitle")
 @app.post("/api/volcengine/subtitle")
 def volcengine_subtitle(body: VolcSubtitleBody):
     try:
@@ -487,6 +492,7 @@ def volcengine_subtitle(body: VolcSubtitleBody):
         raise HTTPException(404, str(exc)) from exc
 
 
+@app.post("/api/gemini/stop")
 @app.post("/api/volcengine/stop")
 def volcengine_stop(body: VolcSessionBody):
     try:

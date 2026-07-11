@@ -273,6 +273,47 @@ def test_gemini_child_rtc_is_the_default_when_hybrid_callback_is_ready(
     assert realtime.default_provider() == "volcengine"
 
 
+def test_pcm_websocket_never_routes_gemini_to_native_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Client:
+        def __init__(self) -> None:
+            self.messages: list[dict] = []
+            self.accepted = False
+            self.closed = False
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+        async def send_text(self, raw: str) -> None:
+            self.messages.append(json.loads(raw))
+
+        async def close(self) -> None:
+            self.closed = True
+
+    async def native_audio_must_not_run(*_args, **_kwargs) -> None:
+        raise AssertionError("native Gemini audio was called")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-but-disabled")
+    monkeypatch.setattr(realtime, "_bridge_gemini", native_audio_must_not_run)
+    client = Client()
+
+    asyncio.run(realtime.bridge(client, "hardware-session", "gemini"))
+
+    assert realtime.provider_available("gemini") is False
+    assert client.accepted is True
+    assert client.closed is True
+    assert client.messages == [
+        {
+            "type": "ling.error",
+            "code": "rtc_transport_required",
+            "message": "Gemini 只使用童声 RTC；当前 PCM WebSocket 需要迁移到 ByteRTC 或 Device Gateway",
+            "provider": "gemini",
+            "retryable": False,
+        }
+    ]
+
+
 def test_child_voice_profiles_expose_only_bundled_safe_choices() -> None:
     profiles = voice_profiles.public_voice_profiles()
 
@@ -307,9 +348,10 @@ def test_realtime_info_publishes_one_gemini_entry_without_upstream_ids(
     monkeypatch.setattr(realtime, "hybrid_gemini_available", lambda: True)
     info = realtime.info()
 
-    assert "gemini" not in info["providers"]
-    assert info["providers"]["volcengine"]["label"] == "Gemini"
-    assert info["providers"]["volcengine"]["short_label"] == "Gemini"
+    assert info["default_provider"] == "gemini"
+    assert "volcengine" not in info["providers"]
+    assert info["providers"]["gemini"]["label"] == "Gemini"
+    assert info["providers"]["gemini"]["short_label"] == "Gemini"
     assert "model" not in info
     assert "voice" not in info
     assert all("model" not in provider for provider in info["providers"].values())
@@ -317,6 +359,6 @@ def test_realtime_info_publishes_one_gemini_entry_without_upstream_ids(
     assert info["default_voice_profile"] in {
         profile["id"] for profile in info["voice_profiles"]
     }
-    assert info["providers"]["volcengine"]["voice_profile"] == info[
+    assert info["providers"]["gemini"]["voice_profile"] == info[
         "default_voice_profile"
     ]

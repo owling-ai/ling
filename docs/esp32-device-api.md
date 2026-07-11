@@ -10,24 +10,22 @@ ESP32 可在隔离网络中复用浏览器 Demo 协议：
 
 ```text
 POST /api/session/start
-WS   /api/realtime/ws?session_id=<id>&provider=gemini|stepfun|minicpm
+WS   /api/realtime/ws?session_id=<id>&provider=stepfun|minicpm
 POST /api/session/end
 ```
 
-该兼容协议只能使用 Gemini Live 原声、StepFun 或 MiniCPM。`sunny` / `sprout` 原生童声当前依赖 ByteRTC，不走这条 WebSocket 媒体面。
+该兼容协议只保留 StepFun 或 MiniCPM。`provider=gemini` 不再调用 Gemini Live 原声音频，而是返回 `rtc_transport_required`；`sunny` / `sprout` 童声依赖 ByteRTC，不走这条 WebSocket 媒体面。
 
 当前响应和限制：
 
 - `session/start` 返回 `session_id`、`opening`、`review_items`，不返回完整记忆包。
 - WebSocket 使用 JSON + Base64，不适合量产带宽和内存预算。
-- Gemini：16 kHz PCM16 上行、24 kHz PCM16 下行、可发 JPEG。
 - StepFun：24 kHz PCM16 双向、无视频。
 - MiniCPM：设备仍按 16 kHz PCM16 上行，后端负责协议和格式转换；当前无用户 ASR。
-- Gemini 童声和火山 Ark 方案依赖 ByteRTC；支持 ByteRTC 的硬件调用 `prepare` 时省略 `voice_profile` 即默认使用“小晴天”。裸 ESP32 不能复用 Web SDK，仍需要 RTC 原生 SDK 或 Device Gateway。
+- Gemini 童声和火山 Ark 方案依赖 ByteRTC；支持 ByteRTC 的硬件调用 `/api/gemini/prepare` 时省略 `voice_profile` 即默认使用“小晴天”。裸 ESP32 不能复用 Web SDK，仍需要 RTC 原生 SDK 或 Device Gateway。
 - 固定 `CHILD_ID=1`，没有设备鉴权或绑定。
 - `/api/session/end` 同步运行冷路径，可能耗时。
-- 业务 session、转写和 Gemini resumption handle 已持久化；设备复用同一 `session_id` 重连时，后端优先恢复 Gemini 会话，token 失效则回放已完成的文本历史。实时 WebSocket 本身仍需重新建立。
-- Gemini 上游短暂失败时后端发送 `ling.error` 并保持设备 WebSocket，按退避重试；设备仍应在长时间无恢复时自行重新建链。
+- 业务 session 和转写已持久化；实时 WebSocket 本身仍需重新建立。
 - 下行 `response.audio.delta` 会控制在单帧 64 KiB 以内，过大的 Gemini 音频块由后端分片。
 
 P0 仅用于验证 I2S、采集、播放和网络链路。没有可靠 AEC 时使用按键说话或半双工，不宣称全双工打断。
@@ -108,5 +106,6 @@ Offset  Size  Field
 
 ## Change log
 
+- `2026-07-11`：禁用 ESP32 PCM WebSocket 的 Gemini Live 原声音频；`provider=gemini` 现在明确要求迁移到童声 RTC 或 Device Gateway。
 - `2026-07-11`：明确 Gemini 童声使用 ByteRTC，不能通过裸 ESP32 兼容 WebSocket 选择 profile。
 - `2026-07-11`：按当前代码修正 `session/start` 响应，加入 MiniCPM；删除把建议协议写成现有能力的内容，压缩为明确的未实现提案。

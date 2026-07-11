@@ -184,7 +184,7 @@ def test_prepare_route_defaults_hardware_and_allows_web_preview_selection(
             json={"session_id": "session", "voice_profile": "sprout"},
         )
         defaulted = client.post(
-            "/api/volcengine/prepare",
+            "/api/gemini/prepare",
             json={"session_id": "hardware"},
         )
 

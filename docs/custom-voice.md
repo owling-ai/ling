@@ -67,7 +67,7 @@ Gemini Live 的实验 `replicatedVoiceConfig` 也没有作为替代：
 
 该约束通过 `VolcanoTTSParameters.req_params.context_texts` 随 RTC 任务持续生效，不修改音高，也不做播放端后处理。
 
-默认 profile 为 `sunny`。环境变量 `LING_VOLC_VOICE_PROFILE` 只接受 `sunny` 或 `sprout`；RTC 或硬件客户端只传 `session_id` 即可直接获得默认童声。网页调试台可以提交公开 profile ID 进行两档验收；未传、非法或已经删除的 ID 都回退到 `sunny`。profile 在 `/api/volcengine/prepare` 时绑定，通话中不能切换。
+默认 profile 为 `sunny`。环境变量 `LING_VOLC_VOICE_PROFILE` 只接受 `sunny` 或 `sprout`；RTC 或硬件客户端只传 `session_id` 即可直接获得默认童声。网页调试台可以提交公开 profile ID 进行两档验收；未传、非法或已经删除的 ID 都回退到 `sunny`。profile 在 `/api/gemini/prepare` 时绑定，通话中不能切换。
 
 ## 5. 评审方法
 
@@ -137,7 +137,7 @@ LING_VOLC_VOICE_PROFILE=sunny
 LING_REALTIME_PROVIDER=volcengine
 ```
 
-`LING_VOLC_GEMINI_LLM_URL` 必须是公网 HTTPS URL，并路由到运行当前进程的同一个 Ling 服务。若未配置，火山 RTC 回退到 Ark；Gemini Live 原声仍可作为独立调试 provider，但不再提供或展示伪童声 profile。
+`LING_VOLC_GEMINI_LLM_URL` 必须是公网 HTTPS URL，并路由到运行当前进程的同一个 Ling 服务。若未配置，火山 RTC 可回退到 Ark，但 Gemini provider 不会回退到 Gemini Live 原声音频。
 
 ## 7. 回调安全
 

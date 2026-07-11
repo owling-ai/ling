@@ -4,6 +4,8 @@
 来源：ESP32-S3 固件调试会话（Claude Code，项目 `~/Downloads/esp32s3_audio_llm`）
 读者：在 `~/workspace/ling` 工作的 Codex / 后端维护者
 
+> 2026-07-11 后续变更：产品已禁止 Gemini Live 原声音频。本文记录的 `provider=gemini` PCM WebSocket 现返回 `rtc_transport_required`，设备必须迁移到 ByteRTC 原生 SDK、独立流式 TTS 或 Device Gateway 才能获得默认童声。
+
 ## TL;DR
 
 设备端断线自愈、打断、打招呼静音已全部实现并验证工作。剩余四个问题都在后端（`backend/`，跑在本机 8888 端口），按优先级：

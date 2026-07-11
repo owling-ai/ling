@@ -316,7 +316,7 @@ VIEWS.chat = async () => {
   function renderVoicePicker() {
     const panel = $("#voice-panel");
     if (!panel) return;
-    panel.hidden = selectedProvider !== "volcengine";
+    panel.hidden = selectedConfig().transport !== "bytedrtc";
     document.querySelectorAll("[data-voice-option]").forEach(option => {
       const input = $("input", option);
       const selected = input.value === selectedVoiceProfile;
@@ -437,7 +437,7 @@ VIEWS.chat = async () => {
       if (!RT.on || RT.active || RT.userSpeaking) return;
       if (RT.rtcEngine && RT.rtcInfo) {
         try {
-          const result = await api.post("/volcengine/observe", { session_id: CHAT.sessionId });
+          const result = await api.post("/gemini/observe", { session_id: CHAT.sessionId });
           if (!result.ok) return;
         } catch (error) {
           console.warn("[volcengine] 画面观察触发失败", error);
@@ -763,7 +763,7 @@ VIEWS.chat = async () => {
     $("#rt-bar")?.remove();
     const bar = document.createElement("div");
     bar.className = "call-bar"; bar.id = "rt-bar";
-    const voice = selectedProvider === "volcengine" ? ` · ${esc(selectedVoice().name || "")}` : "";
+    const voice = selectedConfig().transport === "bytedrtc" ? ` · ${esc(selectedVoice().name || "")}` : "";
     bar.innerHTML = `${FOX(46)}
       <div class="call-status"><span class="call-dot"></span><b id="rt-status">正在接通…</b>
         <span class="hint">${providerLabel(selectedProvider)}${voice} · 已连接</span></div>`;
@@ -808,7 +808,7 @@ VIEWS.chat = async () => {
       }
       noteActivity(!!item.definite);
       if (item.definite && text) {
-        api.post("/volcengine/subtitle", {
+        api.post("/gemini/subtitle", {
           session_id: CHAT.sessionId,
           speaker_id: item.userId,
           text,
@@ -828,14 +828,14 @@ VIEWS.chat = async () => {
     }
     if (!await ensureChatSession()) return false;
     try {
-      const info = await api.post("/volcengine/prepare", {
+      const info = await api.post("/gemini/prepare", {
         session_id: CHAT.sessionId,
         voice_profile: selectedVoiceProfile,
       });
       const rtc = window.VERTC.createEngine(info.app_id);
       RT.rtcEngine = rtc;
       RT.rtcInfo = info;
-      RT.provider = "volcengine";
+      RT.provider = selectedProvider;
       RT.volcSubtitleBubbles.clear();
       rtc.on(window.VERTC.events.onRoomBinaryMessageReceived, event => handleVolcSubtitle(event.message));
       rtc.on(window.VERTC.events.onUserJoined, event => {
@@ -849,7 +849,7 @@ VIEWS.chat = async () => {
       });
       rtc.on(window.VERTC.events.onTokenWillExpire, async () => {
         try {
-          const renewed = await api.post("/volcengine/prepare", {
+          const renewed = await api.post("/gemini/prepare", {
             session_id: CHAT.sessionId,
             voice_profile: selectedVoiceProfile,
           });
@@ -870,7 +870,7 @@ VIEWS.chat = async () => {
       RT.lastVoiceAt = 0;
       syncCallButtons();
       if (videoRequested && !await startVideo()) videoRequested = false;
-      await api.post("/volcengine/start", { session_id: CHAT.sessionId });
+      await api.post("/gemini/start", { session_id: CHAT.sessionId });
       noteActivity(true);
       setRtStatus("已接通，直接说话吧");
       toast(`📞 已接通 ${providerLabel(selectedProvider)}`);
@@ -885,7 +885,7 @@ VIEWS.chat = async () => {
 
   async function startRealtime() {
     if (RT.on) return true;
-    if (selectedProvider === "volcengine") return startVolcengine();
+    if (selectedConfig().transport === "bytedrtc") return startVolcengine();
     let stream;
     try {
       stream = await navigator.mediaDevices.getUserMedia({
@@ -943,7 +943,7 @@ VIEWS.chat = async () => {
       RT.rtcEngine = null;
       RT.rtcInfo = null;
       RT.volcSubtitleBubbles.clear();
-      if (sid) api.post("/volcengine/stop", { session_id: sid })
+      if (sid) api.post("/gemini/stop", { session_id: sid })
         .catch(error => console.warn("[volcengine] 停止 AI 失败", error));
       (async () => {
         try { await rtc.stopAudioCapture(); } catch { }
