@@ -408,7 +408,7 @@ dialog:focus-visible,
 }
 
 .timeline time {
-  color: var(--ink-faint);
+  color: var(--ink-soft);
   font-size: 12px;
 }
 

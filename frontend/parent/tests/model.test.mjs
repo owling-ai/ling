@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  FORBIDDEN_PROJECTION_FIELDS,
   MOOD_DISCLAIMER,
   RED_LINE_EXPLANATION,
   assertProjectionSafe,
@@ -38,6 +37,15 @@ test("today mood always carries the mandatory non-diagnostic disclaimer", () => 
   assert.equal(view.mood.summary, "整体放松，讲风筝时话变多了。");
   assert.equal(view.mood.disclaimer, MOOD_DISCLAIMER);
   assert.equal(view.metrics[0].display, "18 分钟");
+});
+
+test("today mood empty state still carries the non-diagnostic disclaimer", () => {
+  const view = todayViewModel({ mood: null });
+
+  assert.deepEqual(view.mood, {
+    summary: "",
+    disclaimer: MOOD_DISCLAIMER,
+  });
 });
 
 test("growth exposes exactly the three trainer-manual mastery levels", () => {
@@ -116,8 +124,45 @@ test("guardian policy is summarized as read-only display text", () => {
   assert.equal(view.notifications.length, 3);
 });
 
-test("recursive projection guard rejects every forbidden internal field", () => {
-  for (const field of FORBIDDEN_PROJECTION_FIELDS) {
+test("recursive projection guard normalizes snake_case and camelCase forbidden fields", () => {
+  const forbiddenFieldsUnderTest = [
+    "transcript",
+    "transcripts",
+    "quote",
+    "quotes",
+    "session_id",
+    "sessionId",
+    "prompt",
+    "system_prompt",
+    "systemPrompt",
+    "provider",
+    "provider_response",
+    "providerResponse",
+    "job",
+    "job_id",
+    "jobId",
+    "successes",
+    "exposures",
+    "due_date",
+    "dueDate",
+    "next_review_at",
+    "nextReviewAt",
+    "private_canon",
+    "privateCanon",
+    "delete_url",
+    "deleteUrl",
+    "deletion_target",
+    "deletionTarget",
+    "fact_id",
+    "factId",
+    "diary_id",
+    "diaryId",
+    "raw",
+    "raw_text",
+    "rawText",
+  ];
+
+  for (const field of forbiddenFieldsUnderTest) {
     assert.throws(
       () => assertProjectionSafe({ safe: [{ nested: { [field]: "secret" } }] }),
       new RegExp(field, "i"),

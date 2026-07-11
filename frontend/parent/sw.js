@@ -15,7 +15,7 @@ const SHELL = [
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
-    await Promise.allSettled(SHELL.map((asset) => cache.add(asset)));
+    await cache.addAll(SHELL);
     await self.skipWaiting();
   })());
 });
@@ -23,7 +23,11 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    await Promise.all(names.filter((name) => name !== CACHE_NAME).map((name) => caches.delete(name)));
+    await Promise.all(
+      names
+        .filter((name) => name.startsWith("ling-parent-shell-") && name !== CACHE_NAME)
+        .map((name) => caches.delete(name)),
+    );
     await self.clients.claim();
   })());
 });
@@ -37,7 +41,12 @@ self.addEventListener("fetch", (event) => {
   if (event.request.mode === "navigate") {
     event.respondWith(
       fetch(event.request).catch(async () => (
-        (await caches.match("/parent")) || (await caches.match("/parent/index.html"))
+        (await caches.match("/parent/"))
+          || (await caches.match("/parent/index.html"))
+          || new Response("家长端暂时离线，请恢复网络后重试。", {
+            status: 503,
+            headers: { "Content-Type": "text/plain; charset=utf-8" },
+          })
       )),
     );
     return;

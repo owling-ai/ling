@@ -28,29 +28,29 @@
       <p class="header-summary">同一份记忆，换一副专业眼镜。共养，不监控。</p>
     </header>
 
-    <main id="app-main" tabindex="-1">
-      <section id="panel-today" class="view-panel" role="tabpanel" aria-labelledby="tab-today">
-        <div class="initial-state" aria-live="polite">正在准备今日速览</div>
-      </section>
-      <section id="panel-growth" class="view-panel" role="tabpanel" aria-labelledby="tab-growth" hidden>
-        <div class="initial-state" aria-live="polite">切换到成长时加载</div>
-      </section>
-      <section id="panel-memory" class="view-panel" role="tabpanel" aria-labelledby="tab-memory" hidden>
-        <div class="initial-state" aria-live="polite">切换到记忆时加载</div>
-      </section>
-      <section id="panel-guardian" class="view-panel" role="tabpanel" aria-labelledby="tab-guardian" hidden>
-        <div class="initial-state" aria-live="polite">切换到守护时加载</div>
-      </section>
-    </main>
-
     <nav class="tab-bar" aria-label="家长工作视图">
-      <div class="tab-list" role="tablist" aria-label="训练师手册">
-        <button id="tab-today" type="button" role="tab" aria-selected="true" aria-controls="panel-today" data-tab="today">今日</button>
+      <div class="tab-list" role="tablist" aria-label="训练师手册" aria-orientation="horizontal">
+        <button id="tab-today" type="button" role="tab" aria-selected="true" aria-controls="panel-today" data-tab="today" tabindex="0">今日</button>
         <button id="tab-growth" type="button" role="tab" aria-selected="false" aria-controls="panel-growth" data-tab="growth" tabindex="-1">成长</button>
         <button id="tab-memory" type="button" role="tab" aria-selected="false" aria-controls="panel-memory" data-tab="memory" tabindex="-1">记忆</button>
         <button id="tab-guardian" type="button" role="tab" aria-selected="false" aria-controls="panel-guardian" data-tab="guardian" tabindex="-1">守护</button>
       </div>
     </nav>
+
+    <main id="app-main" tabindex="-1">
+      <section id="panel-today" class="view-panel" role="tabpanel" aria-labelledby="tab-today" tabindex="0">
+        <div class="initial-state" aria-live="polite">正在准备今日速览</div>
+      </section>
+      <section id="panel-growth" class="view-panel" role="tabpanel" aria-labelledby="tab-growth" tabindex="0" hidden>
+        <div class="initial-state" aria-live="polite">切换到成长时加载</div>
+      </section>
+      <section id="panel-memory" class="view-panel" role="tabpanel" aria-labelledby="tab-memory" tabindex="0" hidden>
+        <div class="initial-state" aria-live="polite">切换到记忆时加载</div>
+      </section>
+      <section id="panel-guardian" class="view-panel" role="tabpanel" aria-labelledby="tab-guardian" tabindex="0" hidden>
+        <div class="initial-state" aria-live="polite">切换到守护时加载</div>
+      </section>
+    </main>
   </div>
 
   <dialog id="rights-dialog" aria-labelledby="rights-title" aria-describedby="rights-body rights-notice">

@@ -17,6 +17,9 @@ async function responseJson(response) {
   try {
     return await response.json();
   } catch {
+    if (response.ok) {
+      throw new Error("家长投影响应不符合 JSON 契约");
+    }
     return {};
   }
 }

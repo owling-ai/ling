@@ -28,7 +28,11 @@ export const FORBIDDEN_PROJECTION_FIELDS = Object.freeze([
   "raw_text",
 ]);
 
-const FORBIDDEN_FIELDS = new Set(FORBIDDEN_PROJECTION_FIELDS);
+function normalizeProjectionField(key) {
+  return key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+const FORBIDDEN_FIELDS = new Set(FORBIDDEN_PROJECTION_FIELDS.map(normalizeProjectionField));
 const LEGACY_RAW_API = /\/api\/(?:facts|diary|mastery|report|state)(?:\/|\?|#|$)/i;
 
 export const MASTERY_LEVELS = Object.freeze({
@@ -57,7 +61,7 @@ export function assertProjectionSafe(value, seen = new WeakSet()) {
   }
 
   for (const [key, nested] of Object.entries(value)) {
-    if (FORBIDDEN_FIELDS.has(key.toLowerCase())) {
+    if (FORBIDDEN_FIELDS.has(normalizeProjectionField(key))) {
       throw new Error(`Projection contains forbidden field: ${key}`);
     }
     assertProjectionSafe(nested, seen);
@@ -100,7 +104,7 @@ export function todayViewModel(payload = {}) {
       { label: "聊到", display: formatMetric(metrics.topics_count, "件事") },
       { label: "新词开口", display: formatMetric(metrics.new_words_spoken, "个") },
     ],
-    mood: moodSummary ? { summary: moodSummary, disclaimer: MOOD_DISCLAIMER } : null,
+    mood: { summary: moodSummary, disclaimer: MOOD_DISCLAIMER },
     attention: payload.attention && text(payload.attention.summary)
       ? {
           summary: text(payload.attention.summary),

@@ -39,6 +39,16 @@ test("rejects a successful response when it leaks an internal field", async () =
   await assert.rejects(() => parentApi.load("memory"), /transcript/i);
 });
 
+test("rejects a 2xx non-JSON response as a projection contract error", async () => {
+  const parentApi = createParentApi(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => { throw new SyntaxError("Unexpected token '<'"); },
+  }));
+
+  await assert.rejects(() => parentApi.load("today"), /JSON 契约/);
+});
+
 test("preserves a useful projection error message for retry UI", async () => {
   const parentApi = createParentApi(async () => ({
     ok: false,

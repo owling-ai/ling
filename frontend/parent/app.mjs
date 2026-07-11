@@ -98,6 +98,18 @@ function infoBand(label, copy) {
   ]);
 }
 
+function moodSection(mood) {
+  return contentSection("心情速览", [
+    element("div", { className: "section-heading" }, [
+      element("span", { className: "disclaimer", text: mood.disclaimer }),
+    ]),
+    element("p", {
+      className: mood.summary ? "" : "empty-copy",
+      text: mood.summary || "今天还没有足够信息形成心情速览。",
+    }),
+  ]);
+}
+
 function renderLoading(panel, tab) {
   const stack = element("div", { className: "skeleton-stack", attributes: { "aria-hidden": "true" } }, [
     element("div", { className: "skeleton" }),
@@ -148,26 +160,18 @@ function formatMomentTime(value) {
 
 function renderToday(panel, model) {
   const hasMetric = model.metrics.some((metric) => !metric.display.startsWith("-"));
-  const hasNarrative = model.mood || model.attention || model.tonight;
+  const hasNarrative = model.mood.summary || model.attention || model.tonight;
   const content = [
     viewHeader(`${model.childName}和${model.dollName}，今天`, formatDateLabel(model.date)),
   ];
 
   if (!hasMetric && !hasNarrative) {
     content.push(emptyCard("今天还很安静", "完成一次陪伴后，这里会出现可行动的今日速览。"));
-    panel.replaceChildren(...content);
-    return;
+  } else {
+    content.push(metricGrid(model.metrics));
   }
 
-  content.push(metricGrid(model.metrics));
-  if (model.mood) {
-    content.push(contentSection("心情速览", [
-      element("div", { className: "section-heading" }, [
-        element("span", { className: "disclaimer", text: model.mood.disclaimer }),
-      ]),
-      element("p", { text: model.mood.summary }),
-    ]));
-  }
+  content.push(moodSection(model.mood));
 
   if (model.attention) {
     const attentionChildren = [element("p", { text: model.attention.summary })];
