@@ -64,7 +64,7 @@ node --test frontend/parent/tests/*.test.mjs
 
 目前正在推进的是黑客松 Demo 的最后收敛：继续打磨双端移动体验和离线彩排流程，扩充少量高质量预生成素材，并保持媒体生成 provider 接口可替换。现场演示始终以本地 Mock 状态机和预生成素材为主，不让真实视频 API 的耗时、费用或网络状态影响演示。
 
-完整设计决策见 [《Ling · 记忆架构：事实源、体验投影与数字生命》](./Ling-%E8%AE%B0%E5%BF%86%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1.md)，实现拆解见 [黑客松双端实施计划](./docs/superpowers/plans/2026-07-11-hackathon-mobile-apps.md)。
+产品体验与三端职责见 [《Ling · 产品设计总览》](./Ling-%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1%E6%96%87%E6%A1%A3.md)：[灵灵端](./Ling-%E7%81%B5%E7%81%B5%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)、[儿童端](./Ling-%E5%84%BF%E7%AB%A5%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)、[家长端](./Ling-%E5%AE%B6%E9%95%BF%E7%AB%AF%E4%BA%A7%E5%93%81%E8%AE%BE%E8%AE%A1.md)。完整数据与记忆决策见 [《Ling · 记忆架构：事实源、体验投影与数字生命》](./Ling-%E8%AE%B0%E5%BF%86%E6%9E%B6%E6%9E%84%E8%AE%BE%E8%AE%A1.md)，实现拆解见 [黑客松双端实施计划](./docs/superpowers/plans/2026-07-11-hackathon-mobile-apps.md)。
 
 ## 快速开始（uv 管理环境）
 
