@@ -192,6 +192,48 @@ def test_parent_growth_maps_srs_to_three_display_levels(projection_service) -> N
     assert not (_keys(growth) & PARENT_FORBIDDEN)
 
 
+def test_growth_projection_drops_unshaped_fact_text(projection_service) -> None:
+    service, clock, _, _ = projection_service
+    old_id = db.execute(
+        "INSERT INTO facts("
+        "child_id,text,category,subject_key,confidence,source,valid_from,created_at"
+        ") VALUES(?,?,?,?,?,?,?,?)",
+        (
+            1,
+            "孩子说：\"不要把这句原话给家长看\"",
+            "habit",
+            "private-growth",
+            0.8,
+            "test",
+            "2026-07-10 10:00:00",
+            "2026-07-10 10:00:00",
+        ),
+    )
+    new_id = db.execute(
+        "INSERT INTO facts("
+        "child_id,text,category,subject_key,confidence,source,valid_from,created_at"
+        ") VALUES(?,?,?,?,?,?,?,?)",
+        (
+            1,
+            "https://example.invalid/raw-fact",
+            "habit",
+            "private-growth",
+            0.8,
+            "test",
+            "2026-07-11 10:00:00",
+            "2026-07-11 10:00:00",
+        ),
+    )
+    db.execute("UPDATE facts SET superseded_by=? WHERE id=?", (new_id, old_id))
+
+    growth = service.parent_growth(1, period="week", now=clock[0])
+    memory = service.parent_memory(1, limit=20, now=clock[0])
+    serialized = json.dumps({"growth": growth, "memory": memory}, ensure_ascii=False)
+
+    assert "不要把这句原话" not in serialized
+    assert "example.invalid" not in serialized
+
+
 def test_parent_memory_uses_projection_ids_and_has_no_deletion_targets(
     projection_service,
 ) -> None:

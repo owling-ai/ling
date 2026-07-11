@@ -76,10 +76,14 @@ def test_closed_session_rejects_late_transcript_and_idle_writes(
     assert engine.SESSIONS[session_id] == {"closed": True, "result": result}
 
 
-def test_close_exception_restores_active_session_and_allows_retry(
+def test_close_exception_freezes_session_and_allows_retry(
     session_id: str,
 ) -> None:
-    active = engine.get_session(session_id)
+    engine.record_voice_user(session_id, "关闭前")
+    session_db_id = engine.SESSIONS[session_id]["db_id"]
+    before = db.q1(
+        "SELECT transcript_json FROM sessions WHERE id=?", (session_db_id,)
+    )["transcript_json"]
 
     def fail(_session: dict) -> dict:
         raise RuntimeError("finalize failed")
@@ -87,15 +91,16 @@ def test_close_exception_restores_active_session_and_allows_retry(
     with pytest.raises(RuntimeError, match="finalize failed"):
         engine.close_session(session_id, fail)
 
-    assert engine.get_session(session_id) is active
-    assert engine.SESSIONS[session_id] is active
-    engine.record_voice_user(session_id, "失败后仍可继续")
+    assert engine.get_session(session_id) is None
+    assert engine.record_voice_user(session_id, "失败后的迟到消息") is None
+    assert engine.record_voice_doll(session_id, "失败后的迟到回复") is None
+    assert db.q1(
+        "SELECT transcript_json FROM sessions WHERE id=?", (session_db_id,)
+    )["transcript_json"] == before
 
     expected = {"ok": True}
     assert engine.close_session(session_id, lambda session: expected) is expected
     assert engine.get_session(session_id) is None
-    row = db.q1("SELECT transcript_json FROM sessions ORDER BY id DESC LIMIT 1")
-    assert json.loads(row["transcript_json"])[-1]["content"] == "失败后仍可继续"
 
 
 def test_closed_tombstones_are_bounded_without_evicting_active_sessions(

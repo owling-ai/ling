@@ -45,7 +45,7 @@ def _is_closed(session: dict | None) -> bool:
 def _active_session(session_id: str) -> dict | None:
     with _SESSIONS_GUARD:
         session = SESSIONS.get(session_id)
-        return None if _is_closed(session) else session
+    return None if _is_closed(session) or (session and session.get("closing")) else session
 
 
 def _prune_closed_sessions() -> None:
@@ -104,6 +104,7 @@ def close_session(session_id: str, finalize_callback):
                 return session["result"]
             if session is None:
                 return None
+            session["closing"] = True
 
         result = finalize_callback(session)
 
@@ -220,15 +221,21 @@ def _track_child_message(s, text: str):
     emo = any(w in text for w in ["难过", "哭", "生气", "害怕", "不开心"])
     if s["pending_choice"] and len(text.strip()) >= 2 and not emo \
             and not any(w in text for w in RETREAT_WORDS):
-        s["choice_done"] = True
         ev = s["pack"].get("share_event") or {}
         entity = _guess_entity(s)
         canon_text = f"{s['pack']['child_card'].get('name','孩子')}决定：{text.strip()[:40]}"
-        life.add_canon(child_id, entity, canon_text, by_child=True)
-        life.advance_private_arc(child_id)
-        if ev.get("id"):
-            db.execute("UPDATE doll_events SET child_reaction=? WHERE id=?", (text.strip()[:60], ev["id"]))
-        s["canon_written"].append({"entity": entity, "fact_text": canon_text})
+        source_key = f"session:{s['db_id']}:event:{ev.get('id') or 'choice'}"
+        life.commit_private_choice(
+            child_id,
+            source_key=source_key,
+            event_id=ev.get("id"),
+            entity=entity,
+            fact_text=canon_text,
+            child_reaction=text.strip()[:60],
+        )
+        if {"entity": entity, "fact_text": canon_text} not in s["canon_written"]:
+            s["canon_written"].append({"entity": entity, "fact_text": canon_text})
+        s["choice_done"] = True
         s["pending_choice"] = False
 
 

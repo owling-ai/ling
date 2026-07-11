@@ -126,7 +126,8 @@ CREATE TABLE IF NOT EXISTS doll_canon (
     entity TEXT,                    -- 秋千 / 松鼠先生 / 橡树村 ...
     fact_text TEXT,
     by_child INTEGER DEFAULT 0,     -- 1 = 孩子的选择写进的正典
-    established_at TEXT
+    established_at TEXT,
+    source_key TEXT                 -- 一个孩子选择对应一个稳定来源键
 );
 
 CREATE TABLE IF NOT EXISTS doll_arcs (
@@ -267,6 +268,15 @@ def init_db():
     }
     if "published_asset_json" not in moment_columns:
         conn.execute("ALTER TABLE moments ADD COLUMN published_asset_json TEXT")
+    canon_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(doll_canon)").fetchall()
+    }
+    if "source_key" not in canon_columns:
+        conn.execute("ALTER TABLE doll_canon ADD COLUMN source_key TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_doll_canon_source_key "
+        "ON doll_canon(source_key) WHERE source_key IS NOT NULL"
+    )
     conn.commit()
 
 

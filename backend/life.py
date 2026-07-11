@@ -129,10 +129,71 @@ def advance_private_arc(child_id: int) -> dict | None:
     return {"arc_id": arc["id"], "current_beat": new_beat, "status": status}
 
 
-def add_canon(child_id: int, entity: str, fact_text: str, by_child: bool) -> int:
+def commit_private_choice(
+    child_id: int,
+    *,
+    source_key: str,
+    event_id: int | None,
+    entity: str,
+    fact_text: str,
+    child_reaction: str,
+) -> dict:
+    """Atomically record one confirmed child choice and its private story advance."""
+    with db.transaction(immediate=True) as conn:
+        existing = conn.execute(
+            "SELECT id FROM doll_canon WHERE source_key=?", (source_key,)
+        ).fetchone()
+        if existing:
+            return {"created": False, "canon_id": existing["id"], "arc": None}
+
+        canon_id = conn.execute(
+            "INSERT INTO doll_canon("
+            "child_id,entity,fact_text,by_child,established_at,source_key"
+            ") VALUES(?,?,?,?,?,?)",
+            (child_id, entity, fact_text, 1, db.now(), source_key),
+        ).lastrowid
+        row = conn.execute(
+            "SELECT * FROM doll_arcs WHERE child_id=? AND status='active' "
+            "ORDER BY id LIMIT 1",
+            (child_id,),
+        ).fetchone()
+        arc_result = None
+        if row is not None:
+            arc = dict(row)
+            beats = db.jloads(arc["beats_json"])
+            new_beat = min(arc["current_beat"] + 1, len(beats))
+            status = "done" if new_beat >= len(beats) else "active"
+            conn.execute(
+                "UPDATE doll_arcs SET current_beat=?,status=? WHERE id=?",
+                (new_beat, status, arc["id"]),
+            )
+            arc_result = {
+                "arc_id": arc["id"],
+                "current_beat": new_beat,
+                "status": status,
+            }
+        if event_id is not None:
+            updated = conn.execute(
+                "UPDATE doll_events SET child_reaction=? WHERE id=? AND child_id=?",
+                (child_reaction, event_id, child_id),
+            ).rowcount
+            if updated != 1:
+                raise ValueError("choice event not found")
+    return {"created": True, "canon_id": canon_id, "arc": arc_result}
+
+
+def add_canon(
+    child_id: int,
+    entity: str,
+    fact_text: str,
+    by_child: bool,
+    source_key: str | None = None,
+) -> int:
     return db.execute(
-        "INSERT INTO doll_canon(child_id,entity,fact_text,by_child,established_at) VALUES(?,?,?,?,?)",
-        (child_id, entity, fact_text, 1 if by_child else 0, db.now()),
+        "INSERT INTO doll_canon("
+        "child_id,entity,fact_text,by_child,established_at,source_key"
+        ") VALUES(?,?,?,?,?,?)",
+        (child_id, entity, fact_text, 1 if by_child else 0, db.now(), source_key),
     )
 
 

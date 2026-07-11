@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import Callable
 from zoneinfo import ZoneInfo
@@ -34,6 +35,7 @@ PARENT_TOPIC_LABELS = {
     "初次见面": "初次见面",
 }
 PARENT_MOOD_LABELS = {"开心", "兴奋", "平静", "难过", "害怕", "骄傲"}
+_GROWTH_TEXT_RE = re.compile(r"[\u4e00-\u9fffA-Za-z0-9，。！？、（）()：:· -]{2,64}\Z")
 
 
 class ExperienceNotFound(KeyError):
@@ -46,6 +48,16 @@ def _aware(value: datetime) -> datetime:
 
 def _iso(value: datetime) -> str:
     return _aware(value).isoformat(timespec="seconds")
+
+
+def _safe_growth_pair(before: object, after: object) -> dict | None:
+    if not isinstance(before, str) or not isinstance(after, str):
+        return None
+    before = before.strip()
+    after = after.strip()
+    if not _GROWTH_TEXT_RE.fullmatch(before) or not _GROWTH_TEXT_RE.fullmatch(after):
+        return None
+    return {"before": before, "after": after}
 
 
 class ExperienceService:
@@ -827,7 +839,11 @@ class ExperienceService:
             "WHERE old.child_id=? ORDER BY new.created_at DESC",
             (child_id,),
         )
-        return [{"before": row["before"], "after": row["after"]} for row in rows]
+        return [
+            pair
+            for row in rows
+            if (pair := _safe_growth_pair(row["before"], row["after"])) is not None
+        ]
 
     @staticmethod
     def _parent_diary_projection(topics: list[str]) -> dict:
@@ -956,6 +972,9 @@ class ExperienceService:
                 (child_id,),
             )
         ):
+            pair = _safe_growth_pair(row["before"], row["after"])
+            if pair is None:
+                continue
             timeline.append(
                 {
                     "id": f"growth:{index + 1}",
@@ -964,8 +983,7 @@ class ExperienceService:
                     "kind": "growth",
                     "title": "记住变化后的你",
                     "summary": "一件以前会担心的事，现在已经有了新的答案。",
-                    "before": row["before"],
-                    "after": row["after"],
+                    **pair,
                 }
             )
         timeline.sort(key=lambda item: item["occurred_at"] or "", reverse=True)

@@ -9,7 +9,7 @@ from threading import Barrier, Event, Lock
 
 import pytest
 
-from backend import db, engine, llm, memory, seed, workers
+from backend import db, engine, experience, llm, memory, seed, workers
 from backend.app import EndBody, session_end
 
 
@@ -59,6 +59,30 @@ def test_init_db_migrates_old_sessions_table_with_processing_claim(
 
     columns = {row["name"] for row in db.q("PRAGMA table_info(sessions)")}
     assert {"processing", "processing_started_at"} <= columns
+    _close_main_connection()
+
+
+def test_init_db_migrates_old_canon_table_with_choice_source_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _close_main_connection()
+    path = tmp_path / "old-canon.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "CREATE TABLE doll_canon("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT,child_id INTEGER,entity TEXT,"
+        "fact_text TEXT,by_child INTEGER DEFAULT 0,established_at TEXT)"
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(db, "DB_PATH", str(path))
+
+    db.init_db()
+
+    columns = {row["name"] for row in db.q("PRAGMA table_info(doll_canon)")}
+    indexes = {row["name"] for row in db.q("PRAGMA index_list(doll_canon)")}
+    assert "source_key" in columns
+    assert "idx_doll_canon_source_key" in indexes
     _close_main_connection()
 
 
@@ -189,6 +213,50 @@ def test_live_worker_sanitizes_emotions_before_persisting(
 
     assert result["diary"]["emotions"] == ["开心", "骄傲"]
     assert db.jloads(row["emotions_json"]) == ["开心", "骄傲"]
+    engine.SESSIONS.clear()
+
+
+def test_settlement_failure_freezes_processed_session_for_retry(
+    isolated_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seed.seed()
+    engine.SESSIONS.clear()
+    monkeypatch.setattr(llm, "worker_live", lambda: False)
+    started = engine.start_session(db.CHILD_ID)
+    session_id = started["session_id"]
+    session_db_id = engine.SESSIONS[session_id]["db_id"]
+    engine.record_voice_user(session_id, "panda，我最喜欢熊猫")
+    diary_before = db.q1("SELECT COUNT(*) AS n FROM diary_entries")["n"]
+    real_settle = experience.default_service().settle_session
+    attempts = []
+
+    class FlakyExperience:
+        def settle_session(self, session: dict, result: dict) -> dict:
+            attempts.append(session["db_id"])
+            if len(attempts) == 1:
+                raise RuntimeError("settlement failed after processing")
+            return real_settle(session, result)
+
+    monkeypatch.setattr(
+        experience, "default_service", lambda **_kwargs: FlakyExperience()
+    )
+    with pytest.raises(RuntimeError, match="settlement failed after processing"):
+        session_end(EndBody(session_id=session_id))
+
+    row = db.q1(
+        "SELECT processed,transcript_json FROM sessions WHERE id=?", (session_db_id,)
+    )
+    assert row["processed"] == 1
+    assert engine.get_session(session_id) is None
+    assert engine.record_voice_user(session_id, "panda，迟到的转写") is None
+    assert db.q1("SELECT transcript_json FROM sessions WHERE id=?", (session_db_id,)) == {
+        "transcript_json": row["transcript_json"]
+    }
+
+    retried = session_end(EndBody(session_id=session_id))
+    assert retried["moment"]["status"] in {"rendering", "published", "skipped"}
+    assert attempts == [session_db_id, session_db_id]
+    assert db.q1("SELECT COUNT(*) AS n FROM diary_entries") == {"n": diary_before + 1}
     engine.SESSIONS.clear()
 
 
